@@ -46,45 +46,59 @@
       import * as THREE from 'https://esm.sh/three@0.161.0';
       import { OrbitControls } from 'https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 
-      /* ---- helpers ---- */
-      const _v3a=new THREE.Vector3(),_v3b=new THREE.Vector3(),_v3c=new THREE.Vector3();
-      const _m4a=new THREE.Matrix4(),_m4b=new THREE.Matrix4(),_m4c=new THREE.Matrix4();
+      /* ================================================================ */
+      /*  Helpers                                                          */
+      /* ================================================================ */
+      const _v3 = new THREE.Vector3(); // temp vector
+      let splatMesh = null;             // the THREE.Points / THREE.Mesh we render
+      let Splat   = null;              // runtime splat state (shared scratch)
 
-      /* ---- scene ---- */
-      const app = document.getElementById('app');
-      const scene = new THREE.Scene();
+      /* ================================================================ */
+      /*  Scene setup                                                      */
+      /* ================================================================ */
+      const app  = document.getElementById('app');
+
+      const scene     = new THREE.Scene();
       scene.background = new THREE.Color(0x04070a);
 
-      const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      const renderer  = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       app.appendChild(renderer.domElement);
 
-      const camera = new THREE.PerspectiveCamera(35, innerWidth/innerHeight, 0.01, 1000);
+      const camera    = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.01, 1000);
       camera.position.set(0.65, 0.7, 1.2);
       scene.add(camera);
 
-      const controls = new OrbitControls(camera, renderer.domElement);
+      const controls  = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.target.set(0, 0.1, 0);
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
+      // Lights
+      const ambientLight   = new THREE.AmbientLight(0xffffff, 0.18);
       scene.add(ambientLight);
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.0);
+      const dirLight       = new THREE.DirectionalLight(0xffffff, 0.0);
       dirLight.position.set(1.1, 1.4, 0.8);
       scene.add(dirLight);
-      const pointLight = new THREE.PointLight(0xffffff, 0.0, 12, 1.8);
+      const pointLight     = new THREE.PointLight(0xffffff, 0.0, 12, 1.8);
       pointLight.position.set(-0.8, 0.7, 0.7);
       scene.add(pointLight);
 
-      // ground plane
-      const ground = new THREE.Mesh(new THREE.PlaneGeometry(3,3), new THREE.MeshBasicMaterial({color:0x0f172a,side:THREE.DoubleSide}));
-      ground.rotation.x = -Math.PI/2; ground.position.y = -0.03; scene.add(ground);
+      // Ground plane (makes the scan easier to read)
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(3, 3),
+        new THREE.MeshBasicMaterial({ color: 0x0f172a, side: THREE.DoubleSide })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.03;
+      scene.add(ground);
 
-      /* ---- UI ---- */
-      const panel = document.createElement('div');
+      /* ================================================================ */
+      /*  UI panel                                                          */
+      /* ================================================================ */
+      const panel     = document.createElement('div');
       panel.className = 'panel';
       panel.innerHTML = `
         <h1>Relighting viewer</h1>
@@ -104,263 +118,488 @@
       app.appendChild(panel);
 
       const $ = id => document.getElementById(id);
-      const lightParams = { amb:.18, dirOn:true, di:.0, dc:[1,1,1], ptOn:false, pi:.0, pc:[1,1,1] };
 
-      function readUI() {
-        lightParams.amb = +$('ambient').value;
-        lightParams.dirOn = $('dirOn').checked;
-        lightParams.di = +$('dirI').value;
-        const c=$('dirC').value; lightParams.dc=[(+c.substr(1,2))/255,(+c.substr(3,2))/255,(+c.substr(5,2))/255];
-        lightParams.ptOn = $('ptOn').checked;
-        lightParams.pi = +$('ptI').value;
-        const c2=$('ptC').value; lightParams.pc=[(+c2.substr(1,2))/255,(+c2.substr(3,2))/255,(+c2.substr(5,2))/255];
+      /* Light parameter state */
+      const L = { amb: .18, dOn: true, dI: 0, dc: [1,1,1], pOn: false, pI: 0, pc: [1,1,1] };
+
+      function parseColor(hex) {
+        return [+hex[1]+hex[2]]/255, +[hex[3]+hex[4]]/255, +[hex[5]+hex[6]]/255;
       }
-      $('ambient').oninput=readUI; $('dirOn').onchange=readUI;
-      ['dirX','dirY','dirZ'].forEach(id=>$(id).oninput=()=>{ dirLight.position.set(+$('dirX').value,+$('dirY').value,+$('dirZ').value); });
-      $('dirI').oninput=readUI; $('dirC').onchange=readUI;
-      $('ptOn').onchange=readUI; $('ptI').oninput=readUI; $('ptC').onchange=readUI;
-      ['pointX','pointY','pointZ'].forEach(()=>{}); // point position via sliders below
-      const ptRow = document.createElement('div'); ptRow.className='row';
-      ['Point X','Point Y','Point Z'].forEach((label,i)=>{
-        const labelE=document.createElement('label'); labelE.textContent=label; labelE.style.width='60px';
-        const inp=document.createElement('input'); inp.type='range'; inp.min='-2'; inp.max='2'; inp.step='.01';
-        const id=['pointX','pointY','pointZ'][i]; inp.id=id; inp.value=i===0?'-0.8':i===1?'.7':'.7';
-        inp.oninput=()=>{ pointLight.position.set(+$('pointX').value,+$('pointY').value,+$('pointZ').value); };
-        ptRow.appendChild(labelE); ptRow.appendChild(inp);
-      });
-      panel.querySelector('.row:nth-child(6)').after(ptRow);
+      // Actually: parseInt in the right way
+      function rgb(hex) { return [parseInt(hex.substr(1,2),16)/255, parseInt(hex.substr(3,2),16)/255, parseInt(hex.substr(5,2),16)/255]; }
 
-      $('resetBtn').onclick=()=>{
-        $('ambient').value='.18'; $('dirOn').checked=true; $('dirX').value='1.1'; $('dirY').value='1.4'; $('dirZ').value='.8';
-        $('dirI').value='0'; $('dirC').value='#ffffff'; $('ptOn').checked=false; $('ptI').value='0'; $('ptC').value='#ffffff';
-        pointLight.position.set(-.8,.7,.7); readUI();
+      function readLightUI() {
+        L.amb     = +$('ambient').value;
+        L.dOn     = $('dirOn').checked;
+        L.dI      = +$('dirI').value;
+        L.dc      = rgb($('dirC').value);
+        L.pOn     = $('ptOn').checked;
+        L.pI      = +$('ptI').value;
+        L.pc      = rgb($('ptC').value);
+      }
+
+      function onLightChange() { readLightUI(); if (splatMesh) splatMesh.material.uniforms.uAmbient.value = L.amb; if(splatMesh) splatMesh.material.uniforms.uDirEnabled.value = L.dOn?1:0; if(splatMesh) splatMesh.material.uniforms.uDirIntensity.value = L.dI; if(splatMesh) splatMesh.material.uniforms.uDirColor.value.set(rgb($('dirC').value)); if(splatMesh) splatMesh.material.uniforms.uPtEnabled.value = L.pOn?1:0; if(splatMesh) splatMesh.material.uniforms.uPtIntensity.value = L.pI; if(splatMesh) splatMesh.material.uniforms.uPtColor.value.set(rgb($('ptC').value)); }
+
+      $('ambient').oninput  = onLightChange;
+      $('dirOn').onchange   = onLightChange;
+      ['dirX','dirY','dirZ'].forEach(id => $(id).oninput = () => { dirLight.position.set(+$('dirX').value, +$('dirY').value, +$('dirZ').value); });
+      $('dirI').oninput     = onLightChange;  $('dirC').onchange = onLightChange;
+      $('ptOn').onchange    = onLightChange;
+      $('ptI').oninput      = onLightChange;  $('ptC').onchange = onLightChange;
+
+      // Point light position sliders (inserted after directional color row)
+      const ptPosRow = document.createElement('div');
+      [['Px','ptX'], ['Py','ptY'], ['Pz','ptZ']].forEach(([lbl,id]) => {
+        const row = document.createElement('div'); row.className = 'row';
+        const label = document.createElement('label'); label.textContent = lbl; label.style.width = '24px';
+        const inp   = document.createElement('input');  inp.type='range'; inp.min='-2'; inp.max='2'; inp.step='.01';
+        inp.id=id; inp.value= id==='ptX'? '-.8' : '.7';
+        inp.oninput = () => { pointLight.position.set(+$('ptX').value, +$('ptY').value, +$('ptZ').value); };
+        row.appendChild(label); row.appendChild(inp); ptPosRow.appendChild(row);
+      });
+      panel.querySelector('.row:nth-child(7)').after(ptPosRow);
+
+      $('resetBtn').onclick = () => {
+        $('ambient').value='.18';  $('dirOn').checked=true;
+        ['dirX','dirY','dirZ'].forEach((id,i) => $(id).value=['1.1','1.4','.8'][i]);
+        $('dirI').value='0';  $('dirC').value='#ffffff';
+        $('ptOn').checked=false;  $('ptI').value='0';  $('ptC').value='#ffffff';
+        ['ptX','ptY','ptZ'].forEach((id,i) => $(id).value=['-.8','.7','0.7'][i]);
+        pointLight.position.set(-.8,.7,.7); onLightChange();
       };
 
-      /* ---- PLY parser ---- */
+      /* ================================================================ */
+      /*  PLY parser                                                       */
+      /* ================================================================ */
       function parsePly(buf) {
-        const text = new TextDecoder().decode(new Uint8Array(buf).slice(0,65536));
-        const vm = text.match(/element vertex\s+(\d+)/i);
+        const txt = new TextDecoder().decode(new Uint8Array(buf).slice(0, 65536));
+        const vm  = txt.match(/element vertex\s+(\d+)/i);
         if (!vm) throw new Error('No vertex count');
-        const n = +vm[1];
-        const ei = text.indexOf('end_header');
-        let off = ei + 'end_header'.length;
-        while (off < buf.byteLength && (new Uint8Array(buf)[off]===0x0d||new Uint8Array(buf)[off]===0x0a)) off++;
-        const dv = new DataView(buf, off);
+        const N   = +vm[1];
+        const ei  = txt.indexOf('end_header');
+        let off   = ei + 'end_header'.length;
+        while (off < buf.byteLength && new Uint8Array(buf)[off] <= 0x20) off++;
 
-        const pos=new Float32Array(n*3), shDC=new Float32Array(n*3), opa=new Float32Array(n);
-        const ls=new Float32Array(n*3), quat=new Float32Array(n*4);
+        const dv    = new DataView(buf, off);
+        const STRIDE = 164; // 41 × 4 bytes
 
-        for (let i=0;i<n;i++){
-          const o=i*164; // 41 floats * 4 bytes
-          pos[i*3]=dv.getFloat32(o+0,true);  pos[i*3+1]=dv.getFloat32(o+4,true);  pos[i*3+2]=dv.getFloat32(o+8,true);
-          shDC[i*3]=dv.getFloat32(o+24,true); shDC[i*3+1]=dv.getFloat32(o+28,true); shDC[i*3+2]=dv.getFloat32(o+32,true);
-          opa[i]=dv.getFloat32(o+128,true); // float 32 * 4 = offset 128
-          ls[i*3]=dv.getFloat32(o+132,true); ls[i*3+1]=dv.getFloat32(o+136,true); ls[i*3+2]=dv.getFloat32(o+140,true);
-          quat[i*4]=dv.getFloat32(o+144,true); quat[i*4+1]=dv.getFloat32(o+148,true);
-          quat[i*4+2]=dv.getFloat32(o+152,true); quat[i*4+3]=dv.getFloat32(o+156,true);
+        const pos     = new Float32Array(N * 3);
+        const shDC    = new Float32Array(N * 3);   // base color (unclamped)
+        const opac    = new Float32Array(N);
+        const logScl  = new Float32Array(N * 3);
+        const quat    = new Float32Array(N * 4);
+
+        for (let i = 0; i < N; i++) {
+          const o = i * STRIDE;
+          pos[i*3]   = dv.getFloat32(o + 0, true);  pos[i*3+1] = dv.getFloat32(o + 4, true);  pos[i*3+2] = dv.getFloat32(o + 8, true);
+          shDC[i*3]   = dv.getFloat32(o + 24, true); shDC[i*3+1] = dv.getFloat32(o + 28, true); shDC[i*3+2] = dv.getFloat32(o + 32, true);
+          opac[i]      = dv.getFloat32(o + 128, true);       // float 32 → offset 128
+          logScl[i*3]  = dv.getFloat32(o + 132, true);       // float 33 → offset 132
+          logScl[i*3+1]= dv.getFloat32(o + 136, true);       // float 34 → offset 136
+          logScl[i*3+2]= dv.getFloat32(o + 140, true);       // float 35 → offset 140
+          quat[i*4]    = dv.getFloat32(o + 144, true);       // float 36 → offset 144 (w)
+          quat[i*4+1]  = dv.getFloat32(o + 148, true);       // float 37 → offset 148 (x)
+          quat[i*4+2]  = dv.getFloat32(o + 152, true);       // float 38 → offset 152 (y)
+          quat[i*4+3]  = dv.getFloat32(o + 156, true);       // float 39 → offset 156 (z)
         }
-        return { n, pos, shDC, opa, ls, quat };
+        return { N, pos, shDC, opac, logScl, quat };
       }
 
-      /* ---- Gaussian splat build ---- */
-      let mesh;
-      const _camPos=new THREE.Vector3(),_mvInv=new THREE.Matrix4();
-      let needsUpdate=true;
+      /* ================================================================ */
+      /*  Runtime state (reused every frame — no allocation)               */
+      /* ================================================================ */
+      const scratch = {
+        depths: null, affines: null, visW: null, sortIdx: null, // populated on first build
+        // per-splat params (written during computeAffines)
+        majorAxis: null, minorAxis: null, ellipseAngle: null,
+        clipCenterX: null, clipCenterY: null, // splat center in clip coords [-1,1]
+      };
 
-      function computeSplatTransforms() {
+      /* ================================================================ */
+      /*  Core math: compute screen-space ellipse params from camera state */
+      /* ================================================================ */
+      function computeAffines() {
+        if (!Splat) return;
+        const N = Splat.N;
+
+        // Camera extrinsics (camera position in world + view matrix)
         camera.updateMatrixWorld(true);
-        _camPos.setFromMatrixPosition(camera.matrixWorld);
-        _mvInv.copy(camera.matrixWorldInverse); // view matrix = inverse of camera world
+        _v3.setFromMatrixPosition(camera.matrixWorld);
+        const camX=_v3.x, camY=_v3.y, camZ=_v3.z;
 
-        const pr = camera.projectionMatrix.elements;
-        const fl = pr[0]/2, fp = pr[5]/2; // focal lengths in NDC
+        const mv = camera.matrixWorldInverse.elements; // column-major 4×4
+        // Camera basis vectors in world coords:
+        const cX=mv[0], cY=mv[1], cZ=mv[2];   // +X_cam → world
+        const rX=mv[4], rY=mv[5], rZ=mv[6];   // +Y_cam → world
+        const fX=mv[8], fY=mv[9], fZ=mv[10];  // +Z_cam (forward in camera space)
 
-        const mv = _mvInv.elements; // 4x4 row-major? No, Three.js is column-major!
-        // Three.js Matrix4 is column-major internally but elements[] stores it as flat array where:
-        // m[i*4+j] is column i, row j. So mv[0]=m00, mv[1]=m10, mv[2]=m20, mv[3]=m30 (first column).
-        // For view-space computation: camPos = Mv * worldPos + tv where Mv is upper 3x3 of inverse(camera.matrixWorld)
-        const r00=mv[0],r01=mv[4],r02=mv[8];
-        const r10=mv[1],r11=mv[5],r12=mv[9];
-        const r20=mv[2],r21=mv[6],r22=mv[10];
-        const tx=mv[3],ty=mv[7],tz=mv[11];
+        // Camera-space position: [x,y,z] = R^T * (p - camPos), R is camera basis as columns
+        const tX = -(cX*camX+rX*camY+fX*camZ); // translation component of view matrix
+        const tY = -(cY*camX+rY*camY+fY*camZ);
+        const tZ = -(fX*camX+fY*camY+fZ*camZ);
 
-        // near plane distance from camera center to first splat along viewing direction (-Z_cam)
-        const viewDir = _v3a.set(-r20,-r21,-r22);
-        let minDist = Infinity, maxDist = -Infinity;
-        for (let i=0;i<splatCount;i++){
-          const px=pos[i*3],py=pos[i*3+1],pz=pos[i*3+2];
-          // camera-space position: [r00 r01 r02; r10 r11 r12; r20 r21 r22] * [px,py,pz] + [tx,ty,tz]
-          const cx_cam=r00*px+r01*py+r02*pz+tx;
-          const cy_cam=r10*px+r11*py+r12*pz+ty;
-          const cz_cam=r20*px+r21*py+r22*pz+tz;
-          dists[i]=cz_cam;
-          minDist=Math.min(minDist,cz_cam);
-          maxDist=Math.max(maxDist,cz_cam);
-        }
+        // Focal lengths in clip coords (NDC half-range = 1)
+        const f_ndc = 1.0 / Math.tan(camera.fov * Math.PI / 360); // focal in NDC units
 
-        // Use a reasonable near plane to avoid singularities
-        const near = Math.max(0.01, minDist - 0.5);
-        const far = maxDist + 1;
+        for (let i = 0; i < N; i++) {
+          const px=Splat.pos[i*3], py=Splat.pos[i*3+1], pz=Splat.pos[i*3+2];
 
-        // Recompute focal lengths with proper near plane offset
-        const actualNear = Math.max(0.01, minDist * 0.9);
-        // The perspective projection in WebGL: z_clip = (A*z_cam + B)/(C*z_cam)
-        // where A=(far+near)/(near-far), B=2*far*near/(near-far), C=-1
-        // f_x = -pr[0]/2 actually... let me use the camera's intrinsic parameters properly.
+          // Camera-space position
+          const xc = cX*(px-camX) + rX*(py-camY) + fX*(pz-camZ);
+          const yc = cY*(px-camX) + rY*(py-camY) + fY*(pz-camZ);
+          const zc = fX*(px-camX) + fY*(py-camY) + fZ*(pz-camZ) + tZ;
 
-        // Actually for Three.js PerspectiveCamera:
-        // The projection matrix maps [near,far] to [-1,1] in z (NDC).
-        // pr[0] = cot(fovY/2) * aspectRatio / (distance from center to focal plane) ... no.
-        // Standard OpenGL perspective: pr[0] = f_x / near_plane_distance_from_center
+          // Depth for sorting (positive = in front of camera since Z_cam points forward)
+          scratch.depths[i] = zc;
 
-        // Let me just use the standard decomposition:
-        const f_x = fl; // already in clip coord units
-        const f_y = fp;
-        const inv_near = 1.0/near;
+          // Skip if behind camera
+          if (zc < 0.01) { Splat.visW[i] = 0; continue; }
 
-        for (let i=0;i<splatCount;i++){
-          const px=pos[i*3],py=pos[i*3+1],pz=pos[i*3+2];
-          const cx_cam=r00*px+r01*py+r02*pz+tx;
-          const cy_cam=r10*px+r11*py+r12*pz+ty;
-          const cz_cam=r20*px+r21*py+r22*pz+tz;
+          // Exponentiate log-scales → actual scales
+          const sx = Math.exp(Splat.logScl[i*3]);
+          const sy = Math.exp(Splat.logScl[i*3+1]);
+          const sz = Math.exp(Splat.logScl[i*3+2]);
 
-          // Quaternion -> rotation matrix elements (column-major)
-          const q0=quat[i*4],q1=quat[i*4+1],q2=quat[i*4+2],q3=quat[i*4+3];
-          const x=q1,y=q2,z=q3;
-          const sxx=Math.exp(2*ls[i*3]),syy=Math.exp(2*ls[i*3+1]),szz=Math.exp(2*ls[i*3+2]);
-          // Actually: scale = exp(log_scale), so s^2 = exp(2*log_scale)
-          // But actually in 3DGS, the scale parameter is log(s). So actual scale = exp(log_s).
-          // And covariance contribution from scale: S*S^T where S=diag(exp(lx),exp ly),exp lz))
+          // Quaternion (w,x,y,z) → rotation matrix (column-major)
+          const q0=Squat[i*4],  qx=Squat[i*4+1], qy=Squat[i*4+2], qz=Squat[i*4+3];
+          const x=qx, y=qy, z=qz;
+          const R00=1-2*(y*y+z*z),  R10=2*(x*y-q0*z),   R20=2*(x*z+q0*y);
+          const R01=2*(x*y+q0*z),   R11=1-2*(x*x+z*z),   R21=2*(y*z-q0*x);
+          const R02=2*(x*z-q0*y),   R12=2*(y*z+q0*x),    R22=1-2*(x*x+y*y);
 
-          const sx=Math.exp(ls[i*3]),sy=Math.exp(ls[i*3+1]),sz=Math.exp(ls[i*3+2]);
-          const R00=1-2*(y*y+z*z),R10=2*(x*y-q0*z),R20=2*(x*z+q0*y);
-          const R01=2*(x*y+q0*z),R11=1-2*(x*x+z*z),R21=2*(y*z-q0*x);
-          const R02=2*(x*z-q0*y),R12=2*(y*z+q0*x),R22=1-2*(x*x+y*y);
+          // 3D covariance C = R·S²·Rᵀ (symmetric 3×3)
+          const sx2=sx*sx, sy2=sy*sy, sz2=sz*sz;
+          const C00=R00*R00*sx2+R01*R01*sy2+R02*R02*sz2;
+          const C10=R10*R00*sx2+R11*R01*sy2+R12*R02*sz2;
+          const C20=R20*R00*sx2+R21*R01*sy2+R22*R02*sz2;
+          const C11=R10*R10*sx2+R11*R11*sy2+R12*R12*sz2;
+          const C21=R20*R10*sx2+R21*R11*sy2+R22*R12*sz2;
+          const C22=R20*R20*sx2+R21*R21*sy2+R22*R22*sz2;
 
-          // 3D covariance C3 = R*S*S^T*R^T (symmetric)
-          const C00=R00*R00*sxx+R01*R01*syy+R02*R02*szz;
-          const C10=R10*R00*sxx+R11*R01*syy+R12*R02*szz;
-          const C20=R20*R00*sxx+R21*R01*syy+R22*R02*szz;
-          const C11=R10*R10*sxx+R11*R11*syy+R12*R12*szz;
-          const C21=R20*R10*sxx+R21*R11*syy+R22*R12*szz;
-          const C22=R20*R20*sxx+R21*R21*syy+R22*R22*szz;
+          // Jacobian of perspective projection (camera → clip NDC)
+          const invZ = 1 / zc;
+          const Jxx  = f_ndc * invZ;                        // ∂ndc_x/∂x_cam
+          const Jxz  = -f_ndc * xc * invZ * invZ;            // ∂ndc_x/∂z_cam
+          const Jyy  = f_ndc / camera.aspect * invZ;         // ∂ndc_y/∂y_cam
+          const Jyz  = -f_ndc / camera.aspect * yc * invZ * invZ;
 
-          // Jacobian of perspective projection
-          const invCZ = 1.0/cz_cam;
-          const J00=f_x*inv_near*invCZ; // scale by near to get proper NDC -> pixel conversion
-          const J02=-f_x*cx_cam*inv_near*invCZ*invCZ;
-          const J11=f_y*inv_near*invCZ;
-          const J12=-f_y*cy_cam*inv_near*invCZ*invCZ;
+          // 2D covariance: Σ_2d = J · C3 · Jᵀ + 0.3·I (anti-aliasing term)
+          let s00 = Jxx*Jxx*C00   + 2*Jxx*Jxz*C20 + Jxz*Jxz*C22 + 0.3;
+          let s01 = Jxx*(Jyy*C10 + Jyz*C21) + Jxz*(Jyy*C20 + Jyz*C22);
+          let s11 = Jyy*Jyy*C11   + 2*Jyy*Jyz*C21 + Jyz*Jyz*C22 + 0.3;
 
-          // 2D covariance: Sigma = J * C3 * J^T + 0.3*I
-          let s00=J00*J00*C00+2*J00*J02*C20+J02*J02*C22+.3;
-          let s01=J00*J11*C10+J00*J12*C21+J02*J11*C20+J02*J12*C22;
-          let s11=J11*J11*C11+2*J11*J12*C21+J12*J12*C22+.3;
+          // Eigenvalue decomposition of symmetric 2×2 → major/minor axes & angle
+          const trace = s00 + s11;
+          const diff  = Math.sqrt(trace*trace - 4*(s00*s11 - s01*s01));
+          const major = (trace + diff) / 2;
+          const minor = (trace - diff) / 2;
 
-          const det=s00*s11-s01*s01;
-          if (Math.abs(det)<1e-4){ affines[i*9]=affines[i*9+5]=9999; affines[i*9+1]=affines[i*9+4]=0; continue; }
+          // Ellipse angle (rotation of major axis from screen X-axis, in radians)
+          let angle = 0;
+          if (Math.abs(s01) > 1e-6) {
+            angle = Math.atan2(major - s00, s01); // principal eigenvector direction
+          }
 
-          const id=1/det;
-          const a=s11*id, b=-s01*id, d=s00*id; // inverse of upper 2x2 (transposed for affine)
-          const cx_aff=-a*J02-b*J02? -a*J02-b*J12 : 0;
-          const cy_aff=-(b)*J02-d*J12;
+          scratch.majorAxis[i]    = Math.sqrt(major);
+          scratch.minorAxis[i]    = Math.sqrt(Math.max(0, minor));
+          scratch.ellipseAngle[i] = angle;
 
-          affines[i*9]=a; affines[i*9+1]=b; affines[i*9+2]=-cx_aff/s00;
-          affines[i*9+3]=b; affines[i*9+4]=d; affines[i*9+5]=-cy_aff/s11;
-          affines[i*9+6]=0; affines[i*9+7]=0; affines[i*9+8]=1;
+          // Clip-space center of the splat
+          const ndcX = f_ndc * xc / zc;
+          const ndcY = (f_ndc / camera.aspect) * yc / zc;
+          scratch.clipCenterX[i] = ndcX;
+          scratch.clipCenterY[i] = ndcY;
 
-          // Visibility weighting (Kerbl et al.)
-          visW[i] = Math.sqrt(Math.abs(det))/(Math.max(Math.sqrt(s00),Math.sqrt(s11))*4);
+          // Visibility weighting (Kerbl et al. 2023, Eq. 5): sqrt(det(Σ)) / (4·area)
+          const det = s00*s11 - s01*s01;
+          Splat.visW[i] = Math.sqrt(Math.max(0, det)) / (Math.sqrt(major)*Math.sqrt(Math.max(0.001,minor))*8);
         }
       }
 
-      function shellSort(arr, n) {
-        let h=1; while(h<n/3) h=h*3+1;
-        while(h>=1){
-          for(let i=h;i<n;i++){const t=arr[i];let j=i;while(j>=h&&arr[j-h]>t){arr[j]=arr[j-h];j-=h;} arr[j]=t;}
-          h=(h-1)/3;
+      /* ================================================================ */
+      /*  Shell sort (ascending by depth)                                   */
+      /* ================================================================ */
+      function shellSort(depths, idx, N) {
+        let h = 1; while (h < N / 3) h = h * 3 + 1;
+        while (h >= 1) {
+          for (let i = h; i < N; i++) {
+            const tIdx = idx[i], tVal = depths[i];
+            let j = i;
+            while (j >= h && depths[j - h] > tVal) {
+              depths[j]     = depths[j - h];
+              idx[j]        = idx[j - h];
+              j -= h;
+            }
+            depths[j]  = tVal;
+            idx[j]     = tIdx;
+          }
+          h = (h - 1) / 3;
         }
       }
 
-      let splatCount=0, pos=new Float32Array(0), shDC=new Float32Array(0), opa=new Float32Array(0);
-      let ls=new Float32Array(0), quat=new Float32Array(0);
-      let affines=new Float32Array(0), visW=new Float32Array(0), dists=new Float32Array(0), idxBuf=new Int32Array(0);
+      /* ================================================================ */
+      /*  Build / rebuild the splat mesh                                   */
+      /* ================================================================ */
+      function buildSplatMesh(data) {
+        // Clean up previous
+        if (splatMesh) { scene.remove(splatMesh); splatMesh.geometry.dispose(); splatMesh.material.dispose(); }
 
-      function buildSplatMesh(p) {
-        splatCount = p.n;
-        pos=p.pos; shDC=p.shDC; opa=p.opa; ls=p.ls; quat=p.quat;
-        affines=new Float32Array(splatCount*9);
-        visW=new Float32Array(splatCount); dists=new Float32Array(splatCount); idxBuf=new Int32Array(splatCount);
+        Splat = Object.assign({}, data, { visW: new Float32Array(data.N) });
 
-        // Quad geometry (6 vertices for 2 triangles)
-        const qv = new Float32Array([-1,-1,1,-1,1,1,-1,-1,1,1,-1,1]);
-        const qi = new Uint32Array([0,1,2,3,4,5]);
+        // Scratch buffers (allocated once, reused every frame)
+        scratch.depths  = new Float32Array(data.N);
+        scratch.affines = new Float32Array(data.N * 9);
+        scratch.visW    = new Float32Array(data.N);
+        scratch.sortIdx = new Int32Array(data.N);
+        for (let i = 0; i < data.N; i++) scratch.sortIdx[i] = i;
 
+        // Quad vertices (6 verts, 2 triangles, covering [-1,-1] → [1,1])
+        const qv = new Float32Array([ -1,-1, 1,-1, 1,1, -1,-1, 1,1, -1,1 ]);
+        const qi = new Uint16Array([ 0,1,2, 3,4,5 ]);
+
+        // Instance count
+        splatMesh = new THREE.Mesh(
+          createSplatGeometry(Splat, qv, qi),
+          createSplatMaterial()
+        );
+      }
+
+      function createSplatGeometry(data, qv, qi) {
+        const N = data.N;
+        // Base quad geometry (vertices in [-1,1]^2 unit quad)
         const geo = new THREE.InstancedBufferGeometry();
-        geo.setIndex(new THREE.BufferAttribute(qi,1));
+        geo.setIndex(new THREE.BufferAttribute(qi, 1));
         geo.setAttribute('position', new THREE.BufferAttribute(qv, 2));
-        geo.setAttribute('affine', new THREE.InstancedBufferAttribute(affines, 3)); // placeholder
-        geo.setAttribute('opacity', new THREE.InstancedBufferAttribute(opa, 1));
 
-        const mat = new THREE.ShaderMaterial({
-          uniforms:{},
-          transparent:true, depthWrite:false, blending:THREE.NormalBlending, side:THREE.FrontSide,
-          vertexShader:`
-            attribute vec3 affine; // [a,b,cx; d,e,cy; 0,0,1] row-major 3x3 in clip coords
+        // Per-instance: instanceMatrix is the world-space translation (one per splat center)
+        const instMat = new THREE.InstancedBufferAttribute(new Float32Array(N * 16), 4);
+        geo.setAttribute('instanceMatrix', instMat);
+
+        // Per-instance: major axis length, minor axis length, angle (in radians)
+        const majorAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        const minorAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        const angleAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        geo.setAttribute('majorAxis', majorAttr);
+        geo.setAttribute('minorAxis', minorAttr);
+        geo.setAttribute('angle', angleAttr);
+
+        // Per-instance: opacity
+        const opacAttr = new THREE.InstancedBufferAttribute(data.opac, 1);
+        geo.setAttribute('opacity', opacAttr);
+
+        // Per-instance: visibility weight (precomputed factor)
+        const visWAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        geo.setAttribute('visWeight', visWAttr);
+
+        // Per-instance: clip center offset of the splat in ndc space
+        const cxAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        const cyAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+        geo.setAttribute('centerX', cxAttr);
+        geo.setAttribute('centerY', cyAttr);
+
+        return geo;
+      }
+
+      function createSplatMaterial() {
+        return new THREE.ShaderMaterial({
+          uniforms: {
+            uAmbient:   { value: 0.18 },
+            uDirEnabled:{ value: 1 },
+            uDirIntensity:{ value: 0.0 },
+            uDirColor:  { value: new THREE.Color(1,1,1) },
+            uDirDirection:{ value: new THREE.Vector3(1.1, 1.4, 0.8) },
+            uPtEnabled: { value: 0 },
+            uPtIntensity:{ value: 0.0 },
+            uPtColor:   { value: new THREE.Color(1,1,1) },
+            uPtPosition:{ value: new THREE.Vector3(-0.8, 0.7, 0.7) },
+          },
+          transparent: true, depthWrite: false, blending: THREE.NormalBlending, side: THREE.DoubleSide,
+
+          vertexShader: `
+            attribute float majorAxis;
+            attribute float minorAxis;
+            attribute float angle;        // ellipse rotation (radians) from screen X-axis
             attribute float opacity;
-            varying float vOpac;
-            varying vec2 vPos;
-            void main(){
-              vec4 mv = modelViewMatrix * vec4(instanceMatrix[3].xyz, 1.0); // splat world pos from affine? No...
-              gl_Position = projectionMatrix * mv;
-              vPos = (affine.xy) / max(0.001, -mv.z);
-              vOpac = opacity;
+            attribute float visWeight;
+            attribute float centerX;       // clip-space center offset
+            attribute float centerY;       // clip-space center offset
+
+            uniform mat4 projectionMatrix;
+            uniform mat4 modelViewMatrix;
+
+            varying float vOpacity;
+            varying vec2  vSplatPos;      // position relative to splat center (in ellipse space)
+            varying float vVisWeight;
+            varying vec3  vClipCenter;    // clip-space center of the splat
+
+            void main() {
+              // World-space splat center
+              vec4 worldCenter = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+
+              // Clip-space position of splat center
+              vec4 clipCenter = projectionMatrix * modelViewMatrix * worldCenter;
+              float wClip = clipCenter.w;
+
+              // Store center for fragment shader
+              vClipCenter = clipCenter.xyz / wClip;
+
+              // Compute ellipse parameters from major/minor/angle
+              float cosA = cos(angle);
+              float sinA = sin(angle);
+
+              // Unit quad vertex (position attribute) transformed to ellipse coordinates
+              vec2 quadPos = position.xy;  // in [-1,1]^2
+
+              // Scale by ellipse axes and rotate by angle
+              vec2 rotated = quadPos * vec2(majorAxis * cosA - minorAxis * sinA, majorAxis * sinA + minorAxis * cosA)
+                           + vec2(-majorAxis * cosA + minorAxis * sinA, -majorAxis * sinA - minorAxis * cosA);
+
+              // Apply clip-space center offset (already in ndc = [-1,1])
+              float clipX = rotated.x + centerX;
+              float clipY = rotated.y + centerY;
+
+              // Output for fragment shader: position relative to center, in ndc coords
+              vSplatPos = rotated.xy;
+              vOpacity  = opacity;
+              vVisWeight = visWeight;
+
+              gl_Position = vec4(clipX * wClip, clipY * wClip, clipCenter.z, wClip);
             }`,
-          fragmentShader:`
-            varying float vOpac;
-            varying vec2 vPos;
-            void main(){
-              float d2 = dot(vPos,vPos);
-              if(d2>4.6052) discard; // outside ~99% of Gaussian
-              float alpha = vOpac * exp(-0.5*d2);
-              if(alpha<0.001) discard;
-              gl_FragColor = vec4(vec3(1.), alpha);
+          fragmentShader: `
+            uniform float uAmbient;
+            uniform float uDirEnabled;
+            uniform float uDirIntensity;
+            uniform vec3  uDirColor;
+            uniform vec3  uDirDirection;
+            uniform float uPtEnabled;
+            uniform float uPtIntensity;
+            uniform vec3  uPtColor;
+            uniform vec3  uPtPosition;
+
+            varying float vOpacity;
+            varying vec2  vSplatPos;
+            varying float vVisWeight;
+            varying vec3  vClipCenter;
+
+            void main() {
+              // Evaluate 2D Gaussian: sigma = dot(vSplatPos, vSplatPos)
+              // vSplatPos is in units of the ellipse axes (major=1.0, minor=1.0 when normalized)
+              float sigma = dot(vSplatPos, vSplatPos);
+
+              // Outside 99% of distribution → discard
+              if (sigma > 4.6052) discard; // -2*ln(0.01)
+
+              // Gaussian PDF value
+              float pdf = exp(-0.5 * sigma);
+              float alpha = vOpacity * pdf * vVisWeight;
+
+              if (alpha < 0.0039) discard; // < 0.4% → skip fragment
+
+              gl_FragColor = vec4(vec3(gaussPDF), alpha);
             }`
         });
-
-        mesh = new THREE.Mesh(geo, mat);
-        scene.add(mesh);
       }
 
-      // ---- Load ----
-      async function main(){
+
+      /* ================================================================ */
+      /*  Load PLY → build splat mesh                                     */
+      /* ================================================================ */
+      async function main() {
         try {
+          $('status').textContent = 'Loading Buttons.ply…';
           const buf = await (await fetch('./Buttons.ply')).arrayBuffer();
           const data = parsePly(buf);
+
+          // Clamp opacities to valid range [0, 1]
+          for (let i = 0; i < data.N; i++) {
+            data.opac[i] = Math.max(0, Math.min(1, data.opac[i]));
+          }
+
           buildSplatMesh(data);
-          $('status').textContent = `Loaded ${data.n.toLocaleString()} Gaussians`;
-        } catch(e){ $('status').textContent='Error: '+e.message; console.error(e); }
+          $('status').textContent = `${data.N.toLocaleString()} Gaussians loaded`;
+        } catch (e) {
+          $('status').textContent = 'Error: ' + e.message;
+          console.error(e);
+        }
       }
       main();
 
-      /* ---- animate ---- */
-      function onResize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
-      window.addEventListener('resize',onResize);
+      /* ================================================================ */
+      /*  Animation loop                                                    */
+      /* ================================================================ */
+      const _dummy = new THREE.Object3D();
+      let needsRecompute = true;
 
-      const _dummy=new THREE.Object3D();
-      const _mv=new THREE.Matrix4(),_proj=new THREE.Matrix4();
-      function animate(){
-        requestAnimationFrame(animate); controls.update();
-        if(needsUpdate){ needsUpdate=false; computeSplatTransforms(); shellSort(dists,splatCount); for(let i=0;i<splatCount;i++) idxBuf[i]=i; }
-        _mv.copy(camera.matrixWorldInverse); _proj.copy(camera.projectionMatrix);
-        // Update instance matrices with depth-sorted splat positions
-        for(let i=0;i<splatCount;i++){
-          const j=idxBuf[i], k=j*3;
-          _dummy.position.set(pos[k],pos[k+1],pos[k+2]);
-          mesh.instanceMatrix.array.set(_dummy.matrix.toArray(),i*16); // wrong layout
+      function onResize() {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+        if (Splat) needsRecompute = true;
+      }
+      window.addEventListener('resize', onResize);
+
+      // Recompute when orbit controls stop moving (better UX than every frame)
+      // Actually for Gaussian splatting with proper depth sorting, we need fresh
+      // depths whenever the camera moves. But recomputing 250K affines every frame
+      // is expensive (~50-100ms). Strategy: recompute only when the user stops
+      // dragging (controls.end), and during initial load.
+      controls.addEventListener('end', () => { needsRecompute = true; });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+
+        // Recompute splat transforms & sort when camera changes
+        if (needsRecompute && Splat) {
+          computeAffines();
+          shellSort(scratch.depths, scratch.sortIdx, Splat.N);
+
+          // Update instance data on the mesh
+          if (splatMesh) {
+            const geo = splatMesh.geometry;
+            // Update instanceMatrix with sorted positions
+            const imAttr = geo.getAttribute('instanceMatrix');
+            for (let i = 0; i < Splat.N; i++) {
+              const k = scratch.sortIdx[i] * 3;
+              _dummy.position.set(Splat.pos[k], Splat.pos[k+1], Splat.pos[k+2]);
+              _dummy.updateMatrix();
+              const m = _dummy.matrix.elements;
+              for (let j = 0; j < 16; j++) imAttr.array[i*16+j] = m[j]; // row-major copy
+            }
+            imAttr.needsUpdate = true;
+
+            // Update ellipse params
+            const majAttr  = geo.getAttribute('majorAxis');
+            const minAttr  = geo.getAttribute('minorAxis');
+            const angAttr  = geo.getAttribute('angle');
+            const cxAttr   = geo.getAttribute('centerX');
+            const cyAttr   = geo.getAttribute('centerY');
+            for (let i = 0; i < Splat.N; i++) {
+              const j = scratch.sortIdx[i];
+              majAttr.array[i] = scratch.majorAxis[j];
+              minAttr.array[i] = scratch.minorAxis[j];
+              angAttr.array[i] = scratch.ellipseAngle[j];
+              cxAttr.array[i]  = scratch.clipCenterX[j];
+              cyAttr.array[i]  = scratch.clipCenterY[j];
+            }
+            majAttr.needsUpdate = true;
+            minAttr.needsUpdate = true;
+            angAttr.needsUpdate = true;
+            cxAttr.needsUpdate = true;
+            cyAttr.needsUpdate = true;
+
+            // Update visibility weights
+            const visWAttr = geo.getAttribute('visWeight');
+            for (let i = 0; i < Splat.N; i++) {
+              visWAttr.array[i] = Splat.visW[scratch.sortIdx[i]];
+            }
+            visWAttr.needsUpdate = true;
+          }
+
+          needsRecompute = false;
         }
-        mesh.instanceMatrix.needsUpdate=true;
-        renderer.render(scene,camera);
+
+        renderer.render(scene, camera);
       }
       animate();
     </script>
