@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Buttons Relighting Viewer</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #030712;
+        color: #e2e8f0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      .panel {
+        position: absolute;
+        top: 14px;
+        left: 14px;
+        width: min(360px, calc(100vw - 28px));
+        padding: 12px 12px 10px;
+        border: 1px solid rgba(148,163,184,0.25);
+        border-radius: 14px;
+        background: rgba(15,23,42,0.88);
+        backdrop-filter: blur(8px);
+        box-shadow: 0 20px 55px rgba(0,0,0,0.35);
+      }
+      h1 { margin: 0 0 6px; font-size: 16px; }
+      p { margin: 0 0 8px; font-size: 12px; line-height: 1.42; color: #cbd5e1; }
+      .row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:7px 0; font-size:12px; }
+      .row label { flex:1; }
+      input[type="range"] { flex:1; }
+      input[type="color"] { width: 42px; height: 24px; border:none; background:transparent; padding:0; }
+      button { width:100%; margin-top:6px; padding:8px 10px; border:1px solid rgba(56,189,248,0.35); border-radius:8px; background:linear-gradient(135deg,#0f766e,#1e293b); color:white; cursor:pointer; }
+      .status { margin-top:8px; font-size:11px; color:#7dd3fc; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div class="panel">
+      <h1>Relighting viewer</h1>
+      <p>This visualization uses the geometric normals and diffuse color from Buttons.ply. It removes the baked appearance and lets you add your own light direction and intensity.</p>
+      <div class="row"><label>Ambient</label><input id="ambient" type="range" min="0" max="1" step="0.01" value="0.12"></div>
+      <div class="row"><label>Directional intensity</label><input id="dirInt" type="range" min="0" max="2.5" step="0.01" value="0.65"></div>
+      <div class="row"><label>Directional color</label><input id="dirColor" type="color" value="#ffffff"></div>
+      <div class="row"><label>Point intensity</label><input id="pointInt" type="range" min="0" max="4" step="0.01" value="0.2"></div>
+      <div class="row"><label>Point color</label><input id="pointColor" type="color" value="#7dd3fc"></div>
+      <div class="row"><label>Point X</label><input id="pointX" type="range" min="-2" max="2" step="0.01" value="0.7"></div>
+      <div class="row"><label>Point Y</label><input id="pointY" type="range" min="-2" max="2" step="0.01" value="0.8"></div>
+      <div class="row"><label>Point Z</label><input id="pointZ" type="range" min="-2" max="2" step="0.01" value="0.3"></div>
+      <div class="row"><label>Point size</label><input id="size" type="range" min="0.6" max="2.8" step="0.1" value="1.0"></div>
+      <button id="resetBtn">Reset lighting</button>
+      <div class="status" id="status">Loading Buttons.ply…</div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById('view');
+      const ctx = canvas.getContext('2d');
+      const statusEl = document.getElementById('status');
+
+      const ui = {
+        ambient: document.getElementById('ambient'),
+        dirInt: document.getElementById('dirInt'),
+        dirColor: document.getElementById('dirColor'),
+        pointInt: document.getElementById('pointInt'),
+        pointColor: document.getElementById('pointColor'),
+        pointX: document.getElementById('pointX'),
+        pointY: document.getElementById('pointY'),
+        pointZ: document.getElementById('pointZ'),
+        size: document.getElementById('size'),
+        resetBtn: document.getElementById('resetBtn')
+      };
+
+      const state = {
+        ambient: 0.12,
+        dirInt: 0.65,
+        dirColor: '#ffffff',
+        pointInt: 0.2,
+        pointColor: '#7dd3fc',
+        pointPos: { x: 0.7, y: 0.8, z: 0.3 },
+        size: 1.0,
+        rotationY: -0.45,
+        rotationX: -0.15,
+        points: []
+      };
+
+      function readUI() {
+        state.ambient = parseFloat(ui.ambient.value);
+        state.dirInt = parseFloat(ui.dirInt.value);
+        state.dirColor = ui.dirColor.value;
+        state.pointInt = parseFloat(ui.pointInt.value);
+        state.pointColor = ui.pointColor.value;
+        state.pointPos.x = parseFloat(ui.pointX.value);
+        state.pointPos.y = parseFloat(ui.pointY.value);
+        state.pointPos.z = parseFloat(ui.pointZ.value);
+        state.size = parseFloat(ui.size.value);
+      }
+
+      [ui.ambient, ui.dirInt, ui.dirColor, ui.pointInt, ui.pointColor, ui.pointX, ui.pointY, ui.pointZ, ui.size].forEach(el => {
+        el.addEventListener('input', readUI);
+        el.addEventListener('change', readUI);
+      });
+
+      ui.resetBtn.addEventListener('click', () => {
+        ui.ambient.value = '0.12';
+        ui.dirInt.value = '0.65';
+        ui.dirColor.value = '#ffffff';
+        ui.pointInt.value = '0.2';
+        ui.pointColor.value = '#7dd3fc';
+        ui.pointX.value = '0.7';
+        ui.pointY.value = '0.8';
+        ui.pointZ.value = '0.3';
+        ui.size.value = '1.0';
+        readUI();
+      });
+
+      function parseBinaryPly(buffer) {
+        const bytes = new Uint8Array(buffer);
+        const text = new TextDecoder().decode(bytes.slice(0, 65536));
+        const vertexMatch = text.match(/element vertex\s+(\d+)/i);
+        if (!vertexMatch) throw new Error('Unable to find vertex count');
+        const vertexCount = Number(vertexMatch[1]);
+        const endHeader = text.indexOf('end_header');
+        if (endHeader < 0) throw new Error('Unable to find PLY header end');
+        let offset = endHeader + 'end_header'.length;
+        while (offset < bytes.length && (bytes[offset] === 0x0d || bytes[offset] === 0x0a || bytes[offset] === 0x20)) offset += 1;
+
+        const view = new DataView(buffer, offset);
+        const stride = 41;
+        const bytesPerVertex = stride * 4;
+        const points = [];
+        for (let i = 0; i < vertexCount; i++) {
+          const base = i * bytesPerVertex;
+          const x = view.getFloat32(base + 0, true);
+          const y = view.getFloat32(base + 4, true);
+          const z = view.getFloat32(base + 8, true);
+          const nx = view.getFloat32(base + 12, true);
+          const ny = view.getFloat32(base + 16, true);
+          const nz = view.getFloat32(base + 20, true);
+
+          const r = view.getFloat32(base + 24, true);
+          const g = view.getFloat32(base + 28, true);
+          const b = view.getFloat32(base + 32, true);
+          const alpha = view.getFloat32(base + 132, true);
+          if (alpha <= 0.0) continue;
+          points.push({ x, y, z, nx, ny, nz, r, g, b, alpha });
+        }
+        return points;
+      }
+
+      async function loadModel() {
+        const res = await fetch('./Buttons.ply');
+        if (!res.ok) throw new Error('Failed to fetch Buttons.ply');
+        const buffer = await res.arrayBuffer();
+        state.points = parseBinaryPly(buffer);
+        statusEl.textContent = `Loaded ${state.points.length.toLocaleString()} visible primitives from Buttons.ply`;
+      }
+
+      function projectPoint(p) {
+        const cosY = Math.cos(state.rotationY);
+        const sinY = Math.sin(state.rotationY);
+        const cosX = Math.cos(state.rotationX);
+        const sinX = Math.sin(state.rotationX);
+
+        const x1 = p.x * cosY + p.z * sinY;
+        const z1 = -p.x * sinY + p.z * cosY;
+        const y1 = p.y * cosX - z1 * sinX;
+        const z2 = p.y * sinX + z1 * cosX;
+
+        const depth = 2.1 + z2;
+        const scale = 600 / depth;
+        const screenX = canvas.width * 0.5 + x1 * scale * 1.2;
+        const screenY = canvas.height * 0.5 - y1 * scale * 1.2;
+        return { x: screenX, y: screenY, depth, z2 };
+      }
+
+      function shadeColor(p, depth) {
+        const nx = p.nx;
+        const ny = p.ny;
+        const nz = p.nz;
+        const L = { x: -0.6, y: 0.8, z: 0.5 };
+        const len = Math.hypot(L.x, L.y, L.z) || 1;
+        const lx = L.x / len;
+        const ly = L.y / len;
+        const lz = L.z / len;
+        const ndotl = Math.max(0, nx * lx + ny * ly + nz * lz);
+
+        const pointDir = {
+          x: state.pointPos.x - p.x,
+          y: state.pointPos.y - p.y,
+          z: state.pointPos.z - p.z
+        };
+        const pdLen = Math.hypot(pointDir.x, pointDir.y, pointDir.z) || 1;
+        pointDir.x /= pdLen; pointDir.y /= pdLen; pointDir.z /= pdLen;
+        const pdot = Math.max(0, nx * pointDir.x + ny * pointDir.y + nz * pointDir.z);
+
+        const dirColor = hexToRgb(state.dirColor);
+        const pointColor = hexToRgb(state.pointColor);
+
+        const ambient = state.ambient;
+        const diffuse = ndotl * state.dirInt;
+        const pointLight = pdot * state.pointInt / Math.max(0.2, 0.25 + pdLen * pdLen * 0.1);
+
+        const r = (p.r * (1 - ambient) + p.r * (ambient + diffuse) + dirColor.r * diffuse + pointColor.r * pointLight) / 1.8;
+        const g = (p.g * (1 - ambient) + p.g * (ambient + diffuse) + dirColor.g * diffuse + pointColor.g * pointLight) / 1.8;
+        const b = (p.b * (1 - ambient) + p.b * (ambient + diffuse) + dirColor.b * diffuse + pointColor.b * pointLight) / 1.8;
+
+        const depthBoost = 1.0 + Math.max(0, 0.15 - depth * 0.03);
+        return `rgb(${clamp(r * depthBoost, 0, 255)}, ${clamp(g * depthBoost, 0, 255)}, ${clamp(b * depthBoost, 0, 255)})`;
+      }
+
+      function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+      function hexToRgb(hex) {
+        const h = hex.replace('#','');
+        const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+        return {
+          r: parseInt(full.slice(0,2), 16),
+          g: parseInt(full.slice(2,4), 16),
+          b: parseInt(full.slice(4,6), 16)
+        };
+      }
+
+      function render() {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#030712';
+        ctx.fillRect(0, 0, w, h);
+
+        if (!state.points.length) {
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = '16px sans-serif';
+          ctx.fillText('Loading…', 24, 28);
+          return;
+        }
+
+        const sampleStep = Math.max(1, Math.floor(state.points.length / 145000));
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+
+        for (let i = 0; i < state.points.length; i += sampleStep) {
+          const p = state.points[i];
+          const projected = projectPoint(p);
+          const size = Math.max(0.5, state.size * (1.1 - projected.depth * 0.02));
+          if (projected.x < -20 || projected.x > w + 20 || projected.y < -20 || projected.y > h + 20) continue;
+          const color = shadeColor(p, projected.depth);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(projected.x, projected.y, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      function resize() {
+        canvas.width = window.innerWidth * window.devicePixelRatio;
+        canvas.height = window.innerHeight * window.devicePixelRatio;
+        ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+      }
+
+      function animate() {
+        state.rotationY += 0.003;
+        render();
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+      readUI();
+      loadModel().catch(err => {
+        statusEl.textContent = `Load failed: ${err.message}`;
+        console.error(err);
+      });
+      animate();
+    </script>
+  </body>
+</html>

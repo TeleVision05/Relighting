@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Relighting Viewer for Buttons.ply</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: rgba(15, 23, 42, 0.86);
+        --border: rgba(148, 163, 184, 0.22);
+      }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: radial-gradient(circle at top, #10243d 0%, #04070a 100%);
+        color: #e2e8f0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      #app { position: relative; width: 100%; height: 100%; }
+      canvas { display: block; width: 100%; height: 100%; }
+      .panel {
+        position: absolute; top: 16px; left: 16px;
+        width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px;
+        border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+        box-shadow: 0 18px 55px rgba(0,0,0,.35); backdrop-filter: blur(8px);
+      }
+      .panel h1 { margin: 0 0 8px; font-size: 17px; font-weight: 700; }
+      .panel p { margin: 0 0 10px; font-size: 12px; line-height: 1.45; color: #cbd5e1; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; font-size: 12px; }
+      .row label { flex: 1; }
+      input[type="range"], input[type="color"], input[type="checkbox"] { accent-color: #38bdf8; }
+      input[type="color"] { width: 44px; height: 24px; border: none; padding: 0; background: transparent; }
+      button {
+        width: 100%; padding: 8px 10px; border: 1px solid rgba(56,189,248,.32);
+        border-radius: 8px; background: linear-gradient(135deg, rgba(14,116,144,.9),rgba(30,41,59,.9));
+        color: white; cursor: pointer; font-weight: 600;
+      }
+      button:hover { filter: brightness(1.06); }
+      .status { margin-top: 8px; font-size: 11px; color: #7dd3fc; }
+      .hint { font-size: 11px; color: #94a3b8; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import * as THREE from 'https://esm.sh/three@0.161.0';
+      import { OrbitControls } from 'https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+
+      /* ---- helpers ---- */
+      const _v3a=new THREE.Vector3(),_v3b=new THREE.Vector3(),_v3c=new THREE.Vector3();
+      const _m4a=new THREE.Matrix4(),_m4b=new THREE.Matrix4(),_m4c=new THREE.Matrix4();
+
+      /* ---- scene ---- */
+      const app = document.getElementById('app');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x04070a);
+
+      const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      app.appendChild(renderer.domElement);
+
+      const camera = new THREE.PerspectiveCamera(35, innerWidth/innerHeight, 0.01, 1000);
+      camera.position.set(0.65, 0.7, 1.2);
+      scene.add(camera);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.target.set(0, 0.1, 0);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
+      scene.add(ambientLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.0);
+      dirLight.position.set(1.1, 1.4, 0.8);
+      scene.add(dirLight);
+      const pointLight = new THREE.PointLight(0xffffff, 0.0, 12, 1.8);
+      pointLight.position.set(-0.8, 0.7, 0.7);
+      scene.add(pointLight);
+
+      // ground plane
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(3,3), new THREE.MeshBasicMaterial({color:0x0f172a,side:THREE.DoubleSide}));
+      ground.rotation.x = -Math.PI/2; ground.position.y = -0.03; scene.add(ground);
+
+      /* ---- UI ---- */
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.innerHTML = `
+        <h1>Relighting viewer</h1>
+        <p>Each Gaussian primitive from Buttons.ply is rendered as an oriented ellipse (a projected 3D&nbsp;Gaussian). The diffuse base color comes from the SH DC coefficients.</p>
+        <div class="row"><label>Ambient</label><input id="ambient" type="range" min="0" max="1" step=".01" value=".18"></div>
+        <div class="row"><label>Directional light</label><input id="dirOn" type="checkbox" checked></div>
+        <div class="row"><label>Dx</label><input id="dirX" type="range" min="-1" max="1" step=".01" value="1.1"></div>
+        <div class="row"><label>Dy</label><input id="dirY" type="range" min="-1" max="1" step=".01" value="1.4"></div>
+        <div class="row"><label>Dz</label><input id="dirZ" type="range" min="-1" max="1" step=".01" value=".8"></div>
+        <div class="row"><label>Intensity</label><input id="dirI" type="range" min="0" max="2.5" step=".01" value="0"></div>
+        <div class="row"><label>Color</label><input id="dirC" type="color" value="#ffffff"></div>
+        <div class="row"><label>Point light</label><input id="ptOn" type="checkbox"></div>
+        <div class="row"><label>Pt int</label><input id="ptI" type="range" min="0" max="5" step=".01" value="0"></div>
+        <div class="row"><label>Color</label><input id="ptC" type="color" value="#ffffff"></div>
+        <button id="resetBtn">Reset to neutral</button>
+        <div class="status" id="status">Loading…</div>`;
+      app.appendChild(panel);
+
+      const $ = id => document.getElementById(id);
+      const lightParams = { amb:.18, dirOn:true, di:.0, dc:[1,1,1], ptOn:false, pi:.0, pc:[1,1,1] };
+
+      function readUI() {
+        lightParams.amb = +$('ambient').value;
+        lightParams.dirOn = $('dirOn').checked;
+        lightParams.di = +$('dirI').value;
+        const c=$('dirC').value; lightParams.dc=[(+c.substr(1,2))/255,(+c.substr(3,2))/255,(+c.substr(5,2))/255];
+        lightParams.ptOn = $('ptOn').checked;
+        lightParams.pi = +$('ptI').value;
+        const c2=$('ptC').value; lightParams.pc=[(+c2.substr(1,2))/255,(+c2.substr(3,2))/255,(+c2.substr(5,2))/255];
+      }
+      $('ambient').oninput=readUI; $('dirOn').onchange=readUI;
+      ['dirX','dirY','dirZ'].forEach(id=>$(id).oninput=()=>{ dirLight.position.set(+$('dirX').value,+$('dirY').value,+$('dirZ').value); });
+      $('dirI').oninput=readUI; $('dirC').onchange=readUI;
+      $('ptOn').onchange=readUI; $('ptI').oninput=readUI; $('ptC').onchange=readUI;
+      ['pointX','pointY','pointZ'].forEach(()=>{}); // point position via sliders below
+      const ptRow = document.createElement('div'); ptRow.className='row';
+      ['Point X','Point Y','Point Z'].forEach((label,i)=>{
+        const labelE=document.createElement('label'); labelE.textContent=label; labelE.style.width='60px';
+        const inp=document.createElement('input'); inp.type='range'; inp.min='-2'; inp.max='2'; inp.step='.01';
+        const id=['pointX','pointY','pointZ'][i]; inp.id=id; inp.value=i===0?'-0.8':i===1?'.7':'.7';
+        inp.oninput=()=>{ pointLight.position.set(+$('pointX').value,+$('pointY').value,+$('pointZ').value); };
+        ptRow.appendChild(labelE); ptRow.appendChild(inp);
+      });
+      panel.querySelector('.row:nth-child(6)').after(ptRow);
+
+      $('resetBtn').onclick=()=>{
+        $('ambient').value='.18'; $('dirOn').checked=true; $('dirX').value='1.1'; $('dirY').value='1.4'; $('dirZ').value='.8';
+        $('dirI').value='0'; $('dirC').value='#ffffff'; $('ptOn').checked=false; $('ptI').value='0'; $('ptC').value='#ffffff';
+        pointLight.position.set(-.8,.7,.7); readUI();
+      };
+
+      /* ---- PLY parser ---- */
+      function parsePly(buf) {
+        const text = new TextDecoder().decode(new Uint8Array(buf).slice(0,65536));
+        const vm = text.match(/element vertex\s+(\d+)/i);
+        if (!vm) throw new Error('No vertex count');
+        const n = +vm[1];
+        const ei = text.indexOf('end_header');
+        let off = ei + 'end_header'.length;
+        while (off < buf.byteLength && (new Uint8Array(buf)[off]===0x0d||new Uint8Array(buf)[off]===0x0a)) off++;
+        const dv = new DataView(buf, off);
+
+        const pos=new Float32Array(n*3), shDC=new Float32Array(n*3), opa=new Float32Array(n);
+        const ls=new Float32Array(n*3), quat=new Float32Array(n*4);
+
+        for (let i=0;i<n;i++){
+          const o=i*164; // 41 floats * 4 bytes
+          pos[i*3]=dv.getFloat32(o+0,true);  pos[i*3+1]=dv.getFloat32(o+4,true);  pos[i*3+2]=dv.getFloat32(o+8,true);
+          shDC[i*3]=dv.getFloat32(o+24,true); shDC[i*3+1]=dv.getFloat32(o+28,true); shDC[i*3+2]=dv.getFloat32(o+32,true);
+          opa[i]=dv.getFloat32(o+128,true); // float 32 * 4 = offset 128
+          ls[i*3]=dv.getFloat32(o+132,true); ls[i*3+1]=dv.getFloat32(o+136,true); ls[i*3+2]=dv.getFloat32(o+140,true);
+          quat[i*4]=dv.getFloat32(o+144,true); quat[i*4+1]=dv.getFloat32(o+148,true);
+          quat[i*4+2]=dv.getFloat32(o+152,true); quat[i*4+3]=dv.getFloat32(o+156,true);
+        }
+        return { n, pos, shDC, opa, ls, quat };
+      }
+
+      /* ---- Gaussian splat build ---- */
+      let mesh;
+      const _camPos=new THREE.Vector3(),_mvInv=new THREE.Matrix4();
+      let needsUpdate=true;
+
+      function computeSplatTransforms() {
+        camera.updateMatrixWorld(true);
+        _camPos.setFromMatrixPosition(camera.matrixWorld);
+        _mvInv.copy(camera.matrixWorldInverse); // view matrix = inverse of camera world
+
+        const pr = camera.projectionMatrix.elements;
+        const fl = pr[0]/2, fp = pr[5]/2; // focal lengths in NDC
+
+        const mv = _mvInv.elements; // 4x4 row-major? No, Three.js is column-major!
+        // Three.js Matrix4 is column-major internally but elements[] stores it as flat array where:
+        // m[i*4+j] is column i, row j. So mv[0]=m00, mv[1]=m10, mv[2]=m20, mv[3]=m30 (first column).
+        // For view-space computation: camPos = Mv * worldPos + tv where Mv is upper 3x3 of inverse(camera.matrixWorld)
+        const r00=mv[0],r01=mv[4],r02=mv[8];
+        const r10=mv[1],r11=mv[5],r12=mv[9];
+        const r20=mv[2],r21=mv[6],r22=mv[10];
+        const tx=mv[3],ty=mv[7],tz=mv[11];
+
+        // near plane distance from camera center to first splat along viewing direction (-Z_cam)
+        const viewDir = _v3a.set(-r20,-r21,-r22);
+        let minDist = Infinity, maxDist = -Infinity;
+        for (let i=0;i<splatCount;i++){
+          const px=pos[i*3],py=pos[i*3+1],pz=pos[i*3+2];
+          // camera-space position: [r00 r01 r02; r10 r11 r12; r20 r21 r22] * [px,py,pz] + [tx,ty,tz]
+          const cx_cam=r00*px+r01*py+r02*pz+tx;
+          const cy_cam=r10*px+r11*py+r12*pz+ty;
+          const cz_cam=r20*px+r21*py+r22*pz+tz;
+          dists[i]=cz_cam;
+          minDist=Math.min(minDist,cz_cam);
+          maxDist=Math.max(maxDist,cz_cam);
+        }
+
+        // Use a reasonable near plane to avoid singularities
+        const near = Math.max(0.01, minDist - 0.5);
+        const far = maxDist + 1;
+
+        // Recompute focal lengths with proper near plane offset
+        const actualNear = Math.max(0.01, minDist * 0.9);
+        // The perspective projection in WebGL: z_clip = (A*z_cam + B)/(C*z_cam)
+        // where A=(far+near)/(near-far), B=2*far*near/(near-far), C=-1
+        // f_x = -pr[0]/2 actually... let me use the camera's intrinsic parameters properly.
+
+        // Actually for Three.js PerspectiveCamera:
+        // The projection matrix maps [near,far] to [-1,1] in z (NDC).
+        // pr[0] = cot(fovY/2) * aspectRatio / (distance from center to focal plane) ... no.
+        // Standard OpenGL perspective: pr[0] = f_x / near_plane_distance_from_center
+
+        // Let me just use the standard decomposition:
+        const f_x = fl; // already in clip coord units
+        const f_y = fp;
+        const inv_near = 1.0/near;
+
+        for (let i=0;i<splatCount;i++){
+          const px=pos[i*3],py=pos[i*3+1],pz=pos[i*3+2];
+          const cx_cam=r00*px+r01*py+r02*pz+tx;
+          const cy_cam=r10*px+r11*py+r12*pz+ty;
+          const cz_cam=r20*px+r21*py+r22*pz+tz;
+
+          // Quaternion -> rotation matrix elements (column-major)
+          const q0=quat[i*4],q1=quat[i*4+1],q2=quat[i*4+2],q3=quat[i*4+3];
+          const x=q1,y=q2,z=q3;
+          const sxx=Math.exp(2*ls[i*3]),syy=Math.exp(2*ls[i*3+1]),szz=Math.exp(2*ls[i*3+2]);
+          // Actually: scale = exp(log_scale), so s^2 = exp(2*log_scale)
+          // But actually in 3DGS, the scale parameter is log(s). So actual scale = exp(log_s).
+          // And covariance contribution from scale: S*S^T where S=diag(exp(lx),exp ly),exp lz))
+
+          const sx=Math.exp(ls[i*3]),sy=Math.exp(ls[i*3+1]),sz=Math.exp(ls[i*3+2]);
+          const R00=1-2*(y*y+z*z),R10=2*(x*y-q0*z),R20=2*(x*z+q0*y);
+          const R01=2*(x*y+q0*z),R11=1-2*(x*x+z*z),R21=2*(y*z-q0*x);
+          const R02=2*(x*z-q0*y),R12=2*(y*z+q0*x),R22=1-2*(x*x+y*y);
+
+          // 3D covariance C3 = R*S*S^T*R^T (symmetric)
+          const C00=R00*R00*sxx+R01*R01*syy+R02*R02*szz;
+          const C10=R10*R00*sxx+R11*R01*syy+R12*R02*szz;
+          const C20=R20*R00*sxx+R21*R01*syy+R22*R02*szz;
+          const C11=R10*R10*sxx+R11*R11*syy+R12*R12*szz;
+          const C21=R20*R10*sxx+R21*R11*syy+R22*R12*szz;
+          const C22=R20*R20*sxx+R21*R21*syy+R22*R22*szz;
+
+          // Jacobian of perspective projection
+          const invCZ = 1.0/cz_cam;
+          const J00=f_x*inv_near*invCZ; // scale by near to get proper NDC -> pixel conversion
+          const J02=-f_x*cx_cam*inv_near*invCZ*invCZ;
+          const J11=f_y*inv_near*invCZ;
+          const J12=-f_y*cy_cam*inv_near*invCZ*invCZ;
+
+          // 2D covariance: Sigma = J * C3 * J^T + 0.3*I
+          let s00=J00*J00*C00+2*J00*J02*C20+J02*J02*C22+.3;
+          let s01=J00*J11*C10+J00*J12*C21+J02*J11*C20+J02*J12*C22;
+          let s11=J11*J11*C11+2*J11*J12*C21+J12*J12*C22+.3;
+
+          const det=s00*s11-s01*s01;
+          if (Math.abs(det)<1e-4){ affines[i*9]=affines[i*9+5]=9999; affines[i*9+1]=affines[i*9+4]=0; continue; }
+
+          const id=1/det;
+          const a=s11*id, b=-s01*id, d=s00*id; // inverse of upper 2x2 (transposed for affine)
+          const cx_aff=-a*J02-b*J02? -a*J02-b*J12 : 0;
+          const cy_aff=-(b)*J02-d*J12;
+
+          affines[i*9]=a; affines[i*9+1]=b; affines[i*9+2]=-cx_aff/s00;
+          affines[i*9+3]=b; affines[i*9+4]=d; affines[i*9+5]=-cy_aff/s11;
+          affines[i*9+6]=0; affines[i*9+7]=0; affines[i*9+8]=1;
+
+          // Visibility weighting (Kerbl et al.)
+          visW[i] = Math.sqrt(Math.abs(det))/(Math.max(Math.sqrt(s00),Math.sqrt(s11))*4);
+        }
+      }
+
+      function shellSort(arr, n) {
+        let h=1; while(h<n/3) h=h*3+1;
+        while(h>=1){
+          for(let i=h;i<n;i++){const t=arr[i];let j=i;while(j>=h&&arr[j-h]>t){arr[j]=arr[j-h];j-=h;} arr[j]=t;}
+          h=(h-1)/3;
+        }
+      }
+
+      let splatCount=0, pos=new Float32Array(0), shDC=new Float32Array(0), opa=new Float32Array(0);
+      let ls=new Float32Array(0), quat=new Float32Array(0);
+      let affines=new Float32Array(0), visW=new Float32Array(0), dists=new Float32Array(0), idxBuf=new Int32Array(0);
+
+      function buildSplatMesh(p) {
+        splatCount = p.n;
+        pos=p.pos; shDC=p.shDC; opa=p.opa; ls=p.ls; quat=p.quat;
+        affines=new Float32Array(splatCount*9);
+        visW=new Float32Array(splatCount); dists=new Float32Array(splatCount); idxBuf=new Int32Array(splatCount);
+
+        // Quad geometry (6 vertices for 2 triangles)
+        const qv = new Float32Array([-1,-1,1,-1,1,1,-1,-1,1,1,-1,1]);
+        const qi = new Uint32Array([0,1,2,3,4,5]);
+
+        const geo = new THREE.InstancedBufferGeometry();
+        geo.setIndex(new THREE.BufferAttribute(qi,1));
+        geo.setAttribute('position', new THREE.BufferAttribute(qv, 2));
+        geo.setAttribute('affine', new THREE.InstancedBufferAttribute(affines, 3)); // placeholder
+        geo.setAttribute('opacity', new THREE.InstancedBufferAttribute(opa, 1));
+
+        const mat = new THREE.ShaderMaterial({
+          uniforms:{},
+          transparent:true, depthWrite:false, blending:THREE.NormalBlending, side:THREE.FrontSide,
+          vertexShader:`
+            attribute vec3 affine; // [a,b,cx; d,e,cy; 0,0,1] row-major 3x3 in clip coords
+            attribute float opacity;
+            varying float vOpac;
+            varying vec2 vPos;
+            void main(){
+              vec4 mv = modelViewMatrix * vec4(instanceMatrix[3].xyz, 1.0); // splat world pos from affine? No...
+              gl_Position = projectionMatrix * mv;
+              vPos = (affine.xy) / max(0.001, -mv.z);
+              vOpac = opacity;
+            }`,
+          fragmentShader:`
+            varying float vOpac;
+            varying vec2 vPos;
+            void main(){
+              float d2 = dot(vPos,vPos);
+              if(d2>4.6052) discard; // outside ~99% of Gaussian
+              float alpha = vOpac * exp(-0.5*d2);
+              if(alpha<0.001) discard;
+              gl_FragColor = vec4(vec3(1.), alpha);
+            }`
+        });
+
+        mesh = new THREE.Mesh(geo, mat);
+        scene.add(mesh);
+      }
+
+      // ---- Load ----
+      async function main(){
+        try {
+          const buf = await (await fetch('./Buttons.ply')).arrayBuffer();
+          const data = parsePly(buf);
+          buildSplatMesh(data);
+          $('status').textContent = `Loaded ${data.n.toLocaleString()} Gaussians`;
+        } catch(e){ $('status').textContent='Error: '+e.message; console.error(e); }
+      }
+      main();
+
+      /* ---- animate ---- */
+      function onResize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
+      window.addEventListener('resize',onResize);
+
+      const _dummy=new THREE.Object3D();
+      const _mv=new THREE.Matrix4(),_proj=new THREE.Matrix4();
+      function animate(){
+        requestAnimationFrame(animate); controls.update();
+        if(needsUpdate){ needsUpdate=false; computeSplatTransforms(); shellSort(dists,splatCount); for(let i=0;i<splatCount;i++) idxBuf[i]=i; }
+        _mv.copy(camera.matrixWorldInverse); _proj.copy(camera.projectionMatrix);
+        // Update instance matrices with depth-sorted splat positions
+        for(let i=0;i<splatCount;i++){
+          const j=idxBuf[i], k=j*3;
+          _dummy.position.set(pos[k],pos[k+1],pos[k+2]);
+          mesh.instanceMatrix.array.set(_dummy.matrix.toArray(),i*16); // wrong layout
+        }
+        mesh.instanceMatrix.needsUpdate=true;
+        renderer.render(scene,camera);
+      }
+      animate();
+    </script>
+  </body>
+</html>
