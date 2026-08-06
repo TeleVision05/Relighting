@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Gaussian Splatting – Dynamic Relighting Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #030712;
+    --panel: rgba(13,20,36,0.94);
+    --border: rgba(148,163,184,0.16);
+    --blue: #38bdf8;
+    --green: #34d399;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:var(--bg);
+    font-family:'Inter',system-ui,sans-serif; color:var(--text); user-select:none; }
+  #app { display:flex; width:100vw; height:100vh; }
+  .vbox { flex:1; display:flex; overflow:hidden; }
+  .vpane {
+    position:relative; flex:1; height:100%; overflow:hidden;
+    border-right:1px solid var(--border); background:#030712;
+  }
+  .vpane:last-child { border-right:none; }
+  .vpane canvas { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; }
+  .vpane canvas:active { cursor:grabbing; }
+  .badge {
+    position:absolute; top:14px; left:14px; padding:7px 14px;
+    border-radius:10px; border:1px solid var(--border);
+    background:rgba(13,20,36,0.85); backdrop-filter:blur(8px);
+    font-size:12px; font-weight:600; display:flex; align-items:center;
+    gap:8px; pointer-events:none; box-shadow:0 4px 16px rgba(0,0,0,.5); z-index:5;
+  }
+  .dot { width:9px; height:9px; border-radius:50%; }
+  #divider {
+    width:4px; background:var(--border); cursor:col-resize; flex-shrink:0;
+    position:relative; z-index:5; transition:background 0.2s;
+  }
+  #divider:hover, #divider.dragging { background:var(--blue); }
+  #sidebar {
+    width:300px; flex-shrink:0;
+    background:var(--panel); backdrop-filter:blur(16px);
+    border-left:1px solid var(--border);
+    overflow-y:auto; padding:16px 12px;
+    display:flex; flex-direction:column; gap:12px;
+    box-shadow:-12px 0 40px rgba(0,0,0,.5); z-index:10;
+  }
+  #sidebar::-webkit-scrollbar { width:4px; }
+  #sidebar::-webkit-scrollbar-thumb { background:rgba(148,163,184,.2); border-radius:4px; }
+  .h1 { font-size:15px; font-weight:700;
+    background:linear-gradient(135deg,#e0f2fe,#38bdf8,#818cf8);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+  .sub { font-size:11px; color:var(--muted); margin-top:2px; line-height:1.4; }
+  .card {
+    background:rgba(15,23,42,.65); border:1px solid var(--border);
+    border-radius:10px; padding:10px;
+  }
+  .card h3 {
+    font-size:10px; text-transform:uppercase; letter-spacing:.8px;
+    color:var(--blue); font-weight:700; margin-bottom:8px;
+  }
+  .row { display:flex; align-items:center; gap:8px; margin-bottom:7px; font-size:12px; }
+  .row:last-child { margin-bottom:0; }
+  .row label { flex:0 0 88px; color:#cbd5e1; }
+  .row input[type=range] { flex:1; height:4px; accent-color:var(--blue); cursor:pointer; }
+  .row input[type=color] {
+    width:34px; height:22px; border:1px solid var(--border);
+    border-radius:4px; background:transparent; cursor:pointer; padding:1px; }
+  .val { flex:0 0 40px; text-align:right; font-size:11px; color:var(--muted);
+    font-variant-numeric:tabular-nums; }
+  .pgrid { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .btn {
+    padding:7px; border:1px solid var(--border); border-radius:7px;
+    background:rgba(30,41,59,.8); color:var(--text); font-size:11px;
+    font-weight:500; cursor:pointer; transition:all .15s; text-align:center;
+  }
+  .btn:hover { background:rgba(56,189,248,.18); border-color:rgba(56,189,248,.4); color:#7dd3fc; }
+  .btn-reset {
+    width:100%; background:linear-gradient(135deg,rgba(14,116,144,.5),rgba(30,41,59,.9));
+    border-color:rgba(56,189,248,.4);
+  }
+  select {
+    width:100%; padding:5px 8px;
+    background:rgba(15,23,42,.9); border:1px solid var(--border);
+    border-radius:7px; color:var(--text); font-size:12px; outline:none; cursor:pointer;
+  }
+  #status {
+    padding:8px 10px; background:rgba(0,0,0,.4);
+    border-radius:7px; border:1px solid var(--border);
+    font-size:11px; color:var(--green); line-height:1.5;
+  }
+  .hint { font-size:10px; color:var(--muted); text-align:center; line-height:1.5; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="vbox" id="vbox">
+    <div class="vpane" id="pL">
+      <div class="badge"><span class="dot" style="background:#a7f3d0"></span>Neutral — Original SH</div>
+    </div>
+    <div id="divider"></div>
+    <div class="vpane" id="pR">
+      <div class="badge"><span class="dot" style="background:#38bdf8"></span>Relit — Cook-Torrance PBR</div>
+    </div>
+  </div>
+  <div id="sidebar">
+    <div>
+      <div class="h1">3DGS Relighting</div>
+      <div class="sub">True 2D Gaussian Rasterizer · Microfacet PBR</div>
+    </div>
+    <div class="card">
+      <h3>G-Buffer Mode</h3>
+      <select id="gbuf">
+        <option value="0">Full Cook-Torrance PBR</option>
+        <option value="1">Albedo (SH DC)</option>
+        <option value="2">Surface Normals</option>
+        <option value="3">Specular Only</option>
+      </select>
+    </div>
+    <div class="card">
+      <h3>Presets</h3>
+      <div class="pgrid">
+        <button class="btn" data-p="studio">Studio</button>
+        <button class="btn" data-p="sunset">Sunset</button>
+        <button class="btn" data-p="cyber">Cyber Neon</button>
+        <button class="btn" data-p="day">Daylight</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Material</h3>
+      <div class="row"><label>Roughness ρ</label><input type=range id="rough" min=0.02 max=1 step=0.01 value=0.35><span class="val" id="roughV">0.35</span></div>
+      <div class="row"><label>Metallic m</label><input type=range id="metal" min=0 max=1 step=0.01 value=0.10><span class="val" id="metalV">0.10</span></div>
+      <div class="row"><label>Specular ×</label><input type=range id="spec" min=0 max=3 step=0.01 value=1.20><span class="val" id="specV">1.20</span></div>
+    </div>
+    <div class="card">
+      <h3>Directional Light</h3>
+      <div class="row"><label>Intensity</label><input type=range id="dInt" min=0 max=4 step=0.05 value=1.80><span class="val" id="dIntV">1.80</span></div>
+      <div class="row"><label>Azimuth °</label><input type=range id="dAz" min=-180 max=180 step=1 value=45><span class="val" id="dAzV">45°</span></div>
+      <div class="row"><label>Elevation °</label><input type=range id="dEl" min=-90 max=90 step=1 value=35><span class="val" id="dElV">35°</span></div>
+      <div class="row"><label>Color</label><input type=color id="dCol" value="#ffffff"></div>
+    </div>
+    <div class="card">
+      <h3>Point Light</h3>
+      <div class="row"><label>Intensity</label><input type=range id="pInt" min=0 max=5 step=0.05 value=1.20><span class="val" id="pIntV">1.20</span></div>
+      <div class="row"><label>X pos</label><input type=range id="pX" min=-8 max=8 step=0.1 value=2.0><span class="val" id="pXV">2.00</span></div>
+      <div class="row"><label>Y pos</label><input type=range id="pY" min=-8 max=8 step=0.1 value=2.0><span class="val" id="pYV">2.00</span></div>
+      <div class="row"><label>Z pos</label><input type=range id="pZ" min=-8 max=8 step=0.1 value=1.0><span class="val" id="pZV">1.00</span></div>
+      <div class="row"><label>Color</label><input type=color id="pCol" value="#38bdf8"></div>
+    </div>
+    <div class="card">
+      <h3>Ambient</h3>
+      <div class="row"><label>Intensity</label><input type=range id="aInt" min=0 max=1 step=0.01 value=0.20><span class="val" id="aIntV">0.20</span></div>
+      <div class="row"><label>Sky Color</label><input type=color id="aCol" value="#cbd5e1"></div>
+    </div>
+    <div class="card">
+      <button class="btn btn-reset" id="resetBtn">↺ Reset Camera &amp; Lighting</button>
+    </div>
+    <div id="status">Loading Buttons.ply…</div>
+    <div class="hint">Drag to orbit · Scroll to zoom</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const SH_C0 = 0.28209479177387814;
+const PI = Math.PI;
+let statusEl = document.getElementById('status');
+
+/* ── UI ─────────────────────────────────────────────────────── */
+const SLIDERS = {
+  rough:{ v:'roughV', f:v=>v.toFixed(2) },
+  metal:{ v:'metalV', f:v=>v.toFixed(2) },
+  spec: { v:'specV',  f:v=>v.toFixed(2) },
+  dInt: { v:'dIntV',  f:v=>v.toFixed(2) },
+  dAz:  { v:'dAzV',   f:v=>v.toFixed(0)+'°' },
+  dEl:  { v:'dElV',   f:v=>v.toFixed(0)+'°' },
+  pInt: { v:'pIntV',  f:v=>v.toFixed(2) },
+  pX:   { v:'pXV',    f:v=>v.toFixed(2) },
+  pY:   { v:'pYV',    f:v=>v.toFixed(2) },
+  pZ:   { v:'pZV',    f:v=>v.toFixed(2) },
+  aInt: { v:'aIntV',  f:v=>v.toFixed(2) },
+};
+function hexRGB(hex) {
+  const h=hex.replace('#','');
+  return [parseInt(h.slice(0,2),16)/255,parseInt(h.slice(2,4),16)/255,parseInt(h.slice(4,6),16)/255];
+}
+function getUI() {
+  const s={};
+  for (const [k,m] of Object.entries(SLIDERS)) {
+    const val=parseFloat(document.getElementById(k).value);
+    s[k]=val;
+    document.getElementById(m.v).textContent=m.f(val);
+  }
+  s.dCol=hexRGB(document.getElementById('dCol').value);
+  s.pCol=hexRGB(document.getElementById('pCol').value);
+  s.aCol=hexRGB(document.getElementById('aCol').value);
+  s.gbuf=parseInt(document.getElementById('gbuf').value);
+  const az=s.dAz*PI/180, el=s.dEl*PI/180, ce=Math.cos(el);
+  s.dDir=[ce*Math.sin(az), Math.sin(el), ce*Math.cos(az)];
+  return s;
+}
+const PRESETS = {
+  studio:{ rough:0.35, metal:0.10, spec:1.20, dInt:1.80, dAz:45,  dEl:35, dCol:'#ffffff', pInt:1.20, pX:2.0,  pY:2.0, pZ:1.0, pCol:'#38bdf8', aInt:0.20, aCol:'#cbd5e1' },
+  sunset:{ rough:0.22, metal:0.22, spec:1.60, dInt:2.20, dAz:110, dEl:12, dCol:'#fb923c', pInt:1.50, pX:-2.0, pY:1.0, pZ:1.0, pCol:'#60a5fa', aInt:0.12, aCol:'#1e1b4b' },
+  cyber: { rough:0.10, metal:0.55, spec:2.20, dInt:1.80, dAz:-60, dEl:25, dCol:'#ec4899', pInt:3.00, pX:2.0,  pY:-1, pZ:1.0, pCol:'#06b6d4', aInt:0.08, aCol:'#0f172a' },
+  day:   { rough:0.45, metal:0.05, spec:1.00, dInt:2.80, dAz:20,  dEl:65, dCol:'#fef08a', pInt:0.50, pX:0.0,  pY:2.0, pZ:0.5, pCol:'#bae6fd', aInt:0.30, aCol:'#e2e8f0' },
+};
+document.querySelectorAll('[data-p]').forEach(btn=>btn.addEventListener('click',()=>{
+  const p=PRESETS[btn.dataset.p];
+  for(const[k,v]of Object.entries(p)){const el=document.getElementById(k);if(el)el.value=v;}
+}));
+
+/* ── CAMERA ─────────────────────────────────────────────────── */
+// Orbit camera looking at scene center (origin).
+// cam.yaw = horizontal rotation, cam.pitch = vertical tilt, cam.zoom = distance.
+function makeCamera() { return {yaw:0.4, pitch:0.25, zoom:10, dirty:true}; }
+
+// Camera is at spherical position (yaw, pitch, zoom) looking at origin.
+// Returns camera world position.
+function getCamPos(cam) {
+  const cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+  const cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  return [sy*cp*cam.zoom, sp*cam.zoom, cy*cp*cam.zoom];
+}
+
+// Row-major 3×3 view rotation: transforms (world - cam_pos) to view coords.
+// The camera looks down its -Z axis in view space.
+// This is the transpose of the standard camera-to-world rotation.
+function camR(cam) {
+  const cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+  const cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  // Row 0: right vector
+  // Row 1: up vector
+  // Row 2: -forward vector (camera looks in -Z, so this row = +forward in world)
+  return [
+    cy,     0,   -sy,
+    -sy*sp, cp,  -cy*sp,
+    sy*cp,  sp,   cy*cp,
+  ];
+}
+
+function attachOrbit(canvas, cam, other) {
+  let down=false, sx=0, sy=0;
+  canvas.addEventListener('pointerdown',e=>{
+    down=true; sx=e.clientX; sy=e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove',e=>{
+    if(!down)return;
+    cam.yaw   +=(e.clientX-sx)*0.005;
+    cam.pitch -=(e.clientY-sy)*0.005;
+    cam.pitch=Math.max(-PI/2+0.01, Math.min(PI/2-0.01, cam.pitch));
+    sx=e.clientX; sy=e.clientY; cam.dirty=true;
+    other.yaw=cam.yaw; other.pitch=cam.pitch; other.zoom=cam.zoom; other.dirty=true;
+  });
+  canvas.addEventListener('pointerup',()=>down=false);
+  canvas.addEventListener('pointercancel',()=>down=false);
+  canvas.addEventListener('wheel',e=>{
+    e.preventDefault();
+    cam.zoom=Math.max(1, Math.min(50, cam.zoom*Math.exp(e.deltaY*0.001)));
+    cam.dirty=true; other.zoom=cam.zoom; other.dirty=true;
+  },{passive:false});
+}
+
+/* ── PLY LOADER ──────────────────────────────────────────────── */
+async function loadPLY(url) {
+  statusEl.textContent='Fetching Buttons.ply…';
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${url}`);
+  const buf = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+
+  // Find "end_header\n"
+  let hdrEnd = -1;
+  const marker = [101,110,100,95,104,101,97,100,101,114]; // "end_header"
+  for (let i=0; i<Math.min(bytes.length,65536)-10; i++) {
+    let match=true;
+    for(let j=0;j<10;j++) if(bytes[i+j]!==marker[j]){match=false;break;}
+    if(match){hdrEnd=i;break;}
+  }
+  if (hdrEnd<0) throw new Error('No end_header found');
+
+  const hdrText = new TextDecoder().decode(bytes.slice(0, hdrEnd));
+  let N=0;
+  for(const line of hdrText.split('\n')) {
+    if(line.startsWith('element vertex')) N=parseInt(line.split(/\s+/).pop());
+  }
+
+  // Skip "end_header" + newlines
+  let dataStart = hdrEnd + 10;
+  while(dataStart<bytes.length && (bytes[dataStart]===10||bytes[dataStart]===13)) dataStart++;
+
+  statusEl.textContent=`Parsing ${N.toLocaleString()} splats…`;
+  await new Promise(r=>setTimeout(r,0));
+
+  const dv = new DataView(buf, dataStart);
+  const STRIDE = 164; // 41 floats * 4 bytes
+  // Byte offsets within each splat:
+  // [0]x [4]y [8]z [12]nx [16]ny [20]nz [24]f_dc_0 [28]f_dc_1 [32]f_dc_2
+  // [36..131] f_rest_0..23  [132]opacity [136]scale_0 [140]scale_1 [144]scale_2
+  // [148]rot_0 [152]rot_1 [156]rot_2 [160]rot_3
+
+  const px=new Float32Array(N), py=new Float32Array(N), pz=new Float32Array(N);
+  const alR=new Float32Array(N), alG=new Float32Array(N), alB=new Float32Array(N);
+  const op=new Float32Array(N);
+  const sc0=new Float32Array(N), sc1=new Float32Array(N), sc2=new Float32Array(N);
+  const qw=new Float32Array(N), qx=new Float32Array(N), qy=new Float32Array(N), qz=new Float32Array(N);
+  const nx=new Float32Array(N), ny=new Float32Array(N), nz=new Float32Array(N);
+
+  const available = Math.floor((buf.byteLength - dataStart) / STRIDE);
+  const realN = Math.min(N, available);
+
+  for(let i=0;i<realN;i++) {
+    const b=i*STRIDE;
+    px[i]=dv.getFloat32(b+0,true);
+    py[i]=dv.getFloat32(b+4,true);
+    pz[i]=dv.getFloat32(b+8,true);
+
+    // SH DC → linear albedo (clamped to [0,1])
+    alR[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+24,true)*SH_C0));
+    alG[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+28,true)*SH_C0));
+    alB[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+32,true)*SH_C0));
+
+    // Sigmoid opacity
+    const oRaw=dv.getFloat32(b+132,true);
+    op[i]=1.0/(1.0+Math.exp(-Math.max(-20,Math.min(20,oRaw))));
+
+    // Scales (log space, keep raw for exp)
+    sc0[i]=dv.getFloat32(b+136,true);
+    sc1[i]=dv.getFloat32(b+140,true);
+    sc2[i]=dv.getFloat32(b+144,true);
+
+    // Quaternion (rot_0=w, rot_1=x, rot_2=y, rot_3=z) — normalize
+    const r0=dv.getFloat32(b+148,true);
+    const r1=dv.getFloat32(b+152,true);
+    const r2=dv.getFloat32(b+156,true);
+    const r3=dv.getFloat32(b+160,true);
+    const qlen=Math.sqrt(r0*r0+r1*r1+r2*r2+r3*r3)||1;
+    const qW=r0/qlen, qX=r1/qlen, qY=r2/qlen, qZ=r3/qlen;
+    qw[i]=qW; qx[i]=qX; qy[i]=qY; qz[i]=qZ;
+
+    // Surface normal = z-column of rotation matrix R(q):
+    //   R[:,2] = [2(xz+wy),  2(yz-wx),  1-2(x²+y²)]
+    const nnx=2*(qX*qZ+qW*qY);
+    const nny=2*(qY*qZ-qW*qX);
+    const nnz=1-2*(qX*qX+qY*qY);
+    const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
+    nx[i]=nnx/nl; ny[i]=nny/nl; nz[i]=nnz/nl;
+  }
+
+  return {N:realN, px,py,pz, alR,alG,alB, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz};
+}
+
+/* ── SHADERS ─────────────────────────────────────────────────── */
+// Single vertex shader for both neutral and relit modes.
+// Each splat is an instanced quad (TRIANGLE_STRIP, 4 vertices).
+// Per-instance data: center NDC, 2D screen-space covariance, world pos, normal, albedo, opacity.
+const VERT = `#version 300 es
+precision highp float;
+
+// Per-vertex (quad corner)
+in vec2 aCorner;       // (-1,-1), (1,-1), (-1,1), (1,1)
+
+// Per-instance (one per splat)
+in vec2  aCenter;      // NDC screen center [-1..1]
+in vec4  aCov2D;       // (c00, c01, c11, unused) in pixel² — the 2D screen-space covariance
+in vec3  aWorldPos;    // world position for lighting
+in vec3  aNormal;      // surface normal in world space
+in vec3  aAlbedo;      // linear albedo
+in float aOpacity;     // sigmoid opacity
+
+uniform vec2  uViewport;  // canvas size in pixels
+
+out vec2  vUV;        // pixel offset from splat centre (for Gaussian eval)
+out mat2  vInvCov;    // 2x2 inverse of screen-space cov (pixel⁻²)
+out vec3  vWorldPos;
+out vec3  vNormal;
+out vec3  vAlbedo;
+out float vOpacity;
+
+void main() {
+  // Regularise covariance
+  float c00 = aCov2D.x + 0.3;
+  float c01 = aCov2D.y;
+  float c11 = aCov2D.z + 0.3;
+  float det  = c00*c11 - c01*c01;
+  if (det < 1e-6) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // clip away
+    vUV = vec2(0.0); vInvCov = mat2(1.0);
+    vWorldPos = vec3(0.0); vNormal = vec3(0.0,0.0,1.0);
+    vAlbedo = vec3(0.0); vOpacity = 0.0;
+    return;
+  }
+  vInvCov = mat2(c11, -c01, -c01, c00) / det;
+
+  // Bounding radius = 3σ along largest eigen-axis
+  // max eigenvalue of 2x2 SPD: 0.5*(tr + sqrt(tr²-4det))
+  float tr  = c00 + c11;
+  float rad = sqrt(0.5*(tr + sqrt(max(0.0, tr*tr - 4.0*det))));
+  float r   = 3.0 * rad;   // 3-sigma bounding box
+
+  // Pixel offset for this corner
+  vec2 pixOff = aCorner * r;
+
+  // Convert to NDC offset
+  vec2 ndcOff = 2.0 * pixOff / uViewport;
+
+  vUV      = pixOff;
+  vWorldPos = aWorldPos;
+  vNormal  = aNormal;
+  vAlbedo  = aAlbedo;
+  vOpacity = aOpacity;
+
+  gl_Position = vec4(aCenter + ndcOff, 0.0, 1.0);
+}
+`;
+
+// Neutral: just display SH-derived albedo coloured by Gaussian alpha
+const FRAG_NEUTRAL = `#version 300 es
+precision highp float;
+
+in vec2  vUV;
+in mat2  vInvCov;
+in vec3  vWorldPos;
+in vec3  vNormal;
+in vec3  vAlbedo;
+in float vOpacity;
+
+out vec4 fragColor;
+
+void main() {
+  float maha = dot(vUV, vInvCov * vUV);
+  if (maha > 9.0) discard;
+  float alpha = vOpacity * exp(-0.5 * maha);
+  if (alpha < 0.003) discard;
+  fragColor = vec4(vAlbedo, alpha);
+}
+`;
+
+// Relit: Cook-Torrance microfacet PBR + ambient + point light
+const FRAG_RELIT = `#version 300 es
+precision highp float;
+
+in vec2  vUV;
+in mat2  vInvCov;
+in vec3  vWorldPos;
+in vec3  vNormal;
+in vec3  vAlbedo;
+in float vOpacity;
+
+uniform vec3  uCamPos;
+uniform vec3  uAmbCol;   uniform float uAmbInt;
+uniform vec3  uDirDir;   uniform vec3  uDirCol;   uniform float uDirInt;
+uniform vec3  uPtPos;    uniform vec3  uPtCol;    uniform float uPtInt;
+uniform float uRough;    uniform float uMetal;    uniform float uSpec;
+uniform int   uGBuf;
+
+out vec4 fragColor;
+
+const float PI = 3.14159265359;
+
+vec3 cookTorrance(vec3 N, vec3 V, vec3 L, vec3 albedo, float rough, float metal, float specScale) {
+  float NdL = max(0.0, dot(N, L));
+  if (NdL <= 0.0) return vec3(0.0);
+  float NdV = max(0.001, dot(N, V));
+  vec3  H   = normalize(L + V);
+  float NdH = max(0.0, dot(N, H));
+  float VdH = max(0.0, dot(V, H));
+
+  float a  = max(0.01, rough * rough);
+  float a2 = a * a;
+  float d  = NdH*NdH*(a2-1.0)+1.0;
+  float D  = a2 / (PI * d * d);
+
+  vec3 F0 = mix(vec3(0.04 * specScale), albedo, metal);
+  vec3 F  = F0 + (1.0-F0)*pow(1.0-VdH, 5.0);
+
+  float k   = (rough+1.0)*(rough+1.0)/8.0;
+  float GV  = NdV/(NdV*(1.0-k)+k);
+  float GL  = NdL/(NdL*(1.0-k)+k);
+
+  vec3 spec = (D * GV * GL * F) / (4.0*NdV*NdL + 0.001);
+  vec3 kd   = (1.0-F)*(1.0-metal);
+  return (kd*albedo/PI + spec) * NdL;
+}
+
+void main() {
+  float maha = dot(vUV, vInvCov * vUV);
+  if (maha > 9.0) discard;
+  float alpha = vOpacity * exp(-0.5 * maha);
+  if (alpha < 0.003) discard;
+
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(uCamPos - vWorldPos);
+
+  if (uGBuf == 1) { fragColor = vec4(vAlbedo, alpha); return; }
+  if (uGBuf == 2) { fragColor = vec4(N*0.5+0.5, alpha); return; }
+
+  // Ambient
+  vec3 color = vAlbedo * uAmbCol * uAmbInt;
+
+  // Directional
+  if (uDirInt > 0.001) {
+    vec3 L = normalize(uDirDir);
+    color += cookTorrance(N, V, L, vAlbedo, uRough, uMetal, uSpec) * uDirCol * uDirInt * PI;
+  }
+
+  // Point
+  if (uPtInt > 0.001) {
+    vec3  pv  = uPtPos - vWorldPos;
+    float pd  = length(pv);
+    vec3  L   = pv / max(0.001, pd);
+    float att = 1.0 / (0.5 + pd*pd*0.08);
+    color += cookTorrance(N, V, L, vAlbedo, uRough, uMetal, uSpec) * uPtCol * uPtInt * PI * att;
+  }
+
+  if (uGBuf == 3) {
+    vec3 L = normalize(uDirDir); vec3 H = normalize(L+V);
+    float sp = pow(max(0.0,dot(N,H)), 2.0/max(0.01,uRough*uRough));
+    fragColor = vec4(uDirCol*sp*uSpec, alpha); return;
+  }
+
+  fragColor = vec4(clamp(color, 0.0, 1.0), alpha);
+}
+`;
+
+/* ── WEBGL RENDERER ──────────────────────────────────────────── */
+function glCheck(gl, label) {
+  const e=gl.getError();
+  if(e!==gl.NO_ERROR) console.error(`GL error ${label}: 0x${e.toString(16)}`);
+}
+function mkShader(gl, type, src) {
+  const s=gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) {
+    throw new Error(`Shader compile: ${gl.getShaderInfoLog(s)}\n---\n${src.split('\n').map((l,i)=>`${i+1}: ${l}`).join('\n')}`);
+  }
+  return s;
+}
+function mkProg(gl, vs, fs) {
+  const p=gl.createProgram();
+  gl.attachShader(p,mkShader(gl,gl.VERTEX_SHADER,vs));
+  gl.attachShader(p,mkShader(gl,gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))
+    throw new Error(`Link: ${gl.getProgramInfoLog(p)}`);
+  return p;
+}
+
+class Renderer {
+  constructor(canvas, relit) {
+    this.canvas=canvas; this.relit=relit;
+    const gl=canvas.getContext('webgl2',{antialias:false,alpha:false,premultipliedAlpha:false});
+    if(!gl) throw new Error('WebGL2 not available');
+    this.gl=gl;
+    gl.clearColor(0.01,0.015,0.035,1);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+
+    this.progN=mkProg(gl,VERT,FRAG_NEUTRAL);
+    this.progR=mkProg(gl,VERT,FRAG_RELIT);
+    this.prog=relit?this.progR:this.progN;
+
+    // Quad corner buffer (static)
+    const corners=new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+    this.cornerBuf=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,this.cornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER,corners,gl.STATIC_DRAW);
+
+    // Dynamic per-splat instance buffers
+    this.bufs={
+      center:gl.createBuffer(), cov2:gl.createBuffer(),
+      wpos:gl.createBuffer(),   norm:gl.createBuffer(),
+      alb:gl.createBuffer(),    op:gl.createBuffer(),
+    };
+    this.vao=gl.createVertexArray();
+    this.N=0;
+    this._initVAO();
+  }
+
+  _attr(prog, name, buf, size, divisor=1) {
+    const gl=this.gl, loc=gl.getAttribLocation(prog,name);
+    if(loc<0) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0);
+    gl.vertexAttribDivisor(loc,divisor);
+  }
+
+  _initVAO() {
+    const gl=this.gl, prog=this.prog;
+    gl.bindVertexArray(this.vao);
+    // Quad corners: per-vertex
+    const cl=gl.getAttribLocation(prog,'aCorner');
+    gl.bindBuffer(gl.ARRAY_BUFFER,this.cornerBuf);
+    gl.enableVertexAttribArray(cl);
+    gl.vertexAttribPointer(cl,2,gl.FLOAT,false,0,0);
+    gl.vertexAttribDivisor(cl,0);
+    // Per-instance
+    this._attr(prog,'aCenter', this.bufs.center,2);
+    this._attr(prog,'aCov2D',  this.bufs.cov2,  4);
+    this._attr(prog,'aWorldPos',this.bufs.wpos,  3);
+    this._attr(prog,'aNormal', this.bufs.norm,  3);
+    this._attr(prog,'aAlbedo', this.bufs.alb,   3);
+    this._attr(prog,'aOpacity',this.bufs.op,    1);
+    gl.bindVertexArray(null);
+  }
+
+  upload(data) {
+    const gl=this.gl;
+    const up=(buf,arr)=>{gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,arr,gl.DYNAMIC_DRAW);};
+    up(this.bufs.center, data.center);
+    up(this.bufs.cov2,   data.cov2);
+    up(this.bufs.wpos,   data.wpos);
+    up(this.bufs.norm,   data.norm);
+    up(this.bufs.alb,    data.alb);
+    up(this.bufs.op,     data.op);
+    this.N=data.n;
+  }
+
+  resize() {
+    const rect=this.canvas.parentElement.getBoundingClientRect();
+    const dpr=Math.min(window.devicePixelRatio||1,2);
+    this.canvas.width =Math.max(1,Math.floor(rect.width*dpr));
+    this.canvas.height=Math.max(1,Math.floor(rect.height*dpr));
+  }
+
+  render(cam, ui) {
+    const gl=this.gl;
+    const w=this.canvas.width, h=this.canvas.height;
+    if(!w||!h||!this.N) return;
+    gl.viewport(0,0,w,h);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
+    const u=n=>gl.getUniformLocation(this.prog,n);
+    gl.uniform2f(u('uViewport'),w,h);
+    if(this.relit) {
+      const cp=getCamPos(cam);
+      gl.uniform3fv(u('uCamPos'),cp);
+      gl.uniform3fv(u('uAmbCol'),ui.aCol); gl.uniform1f(u('uAmbInt'),ui.aInt);
+      gl.uniform3fv(u('uDirDir'),ui.dDir); gl.uniform3fv(u('uDirCol'),ui.dCol); gl.uniform1f(u('uDirInt'),ui.dInt);
+      gl.uniform3f(u('uPtPos'),ui.pX,ui.pY,ui.pZ); gl.uniform3fv(u('uPtCol'),ui.pCol); gl.uniform1f(u('uPtInt'),ui.pInt);
+      gl.uniform1f(u('uRough'),ui.rough); gl.uniform1f(u('uMetal'),ui.metal); gl.uniform1f(u('uSpec'),ui.spec);
+      gl.uniform1i(u('uGBuf'),ui.gbuf);
+    }
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,this.N);
+    gl.bindVertexArray(null);
+  }
+}
+
+/* ── CPU PROJECTION + SORT ──────────────────────────────────── */
+// Projects 3D splats to screen space, depth-sorts them (far→near),
+// and returns packed GPU arrays ready for upload.
+function projectSplats(data, cam, w, h) {
+  const {N, px,py,pz, alR,alG,alB, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz} = data;
+
+  // Camera matrices
+  const R = camR(cam);
+  const cp = getCamPos(cam);
+  const focal = Math.min(w,h) * 0.8;   // focal length in pixels
+  const hw=w*0.5, hh=h*0.5;
+
+  // Temporary arrays for visible splats
+  const maxV = Math.min(N, 260000);
+  const depths = new Float32Array(maxV);
+  const idxs   = new Int32Array(maxV);
+  let nv=0;
+
+  for (let i=0; i<N; i++) {
+    if (op[i] < 0.003) continue;
+
+    // World → view
+    const dx=px[i]-cp[0], dy=py[i]-cp[1], dz=pz[i]-cp[2];
+    const vx=R[0]*dx+R[1]*dy+R[2]*dz;
+    const vy=R[3]*dx+R[4]*dy+R[5]*dz;
+    const vz=R[6]*dx+R[7]*dy+R[8]*dz;
+    // Depth is -vz (we look down -Z in view space)
+    const depth=-vz;
+    if (depth<0.05) continue;
+
+    // Project to screen pixels
+    const sx=hw+focal*vx/depth;
+    const sy=hh-focal*vy/depth;
+    if (sx<-512||sx>w+512||sy<-512||sy>h+512) continue;
+
+    if (nv>=maxV) continue;
+    depths[nv]=depth;
+    idxs[nv]=i;
+    nv++;
+  }
+
+  // Sort back-to-front (largest depth first)
+  const order=Array.from({length:nv},(_,i)=>i);
+  order.sort((a,b)=>depths[b]-depths[a]);
+
+  // Build GPU buffers in sorted order
+  const center=new Float32Array(nv*2);
+  const cov2  =new Float32Array(nv*4);
+  const wpos  =new Float32Array(nv*3);
+  const norm  =new Float32Array(nv*3);
+  const alb   =new Float32Array(nv*3);
+  const opArr =new Float32Array(nv);
+
+  for (let si=0; si<nv; si++) {
+    const oi=order[si], i=idxs[oi];
+
+    // View-space position (recompute)
+    const dx=px[i]-cp[0], dy=py[i]-cp[1], dz=pz[i]-cp[2];
+    const vx=R[0]*dx+R[1]*dy+R[2]*dz;
+    const vy=R[3]*dx+R[4]*dy+R[5]*dz;
+    const vz=R[6]*dx+R[7]*dy+R[8]*dz;
+    const depth=-vz;
+    const sx=hw+focal*vx/depth;
+    const sy=hh-focal*vy/depth;
+
+    // NDC center
+    center[si*2]   = (sx/hw)-1.0;
+    center[si*2+1] = 1.0-(sy/hh);
+
+    // World pos for lighting
+    wpos[si*3]=px[i]; wpos[si*3+1]=py[i]; wpos[si*3+2]=pz[i];
+    norm[si*3]=nx[i]; norm[si*3+1]=ny[i]; norm[si*3+2]=nz[i];
+    alb[si*3]=alR[i]; alb[si*3+1]=alG[i]; alb[si*3+2]=alB[i];
+    opArr[si]=op[i];
+
+    // ── 2D Covariance projection ──────────────────────────────
+    // Build R_splat from quaternion (q = [w,x,y,z])
+    const qW=qw[i], qX=qx[i], qY=qy[i], qZ=qz[i];
+    const r00=1-2*(qY*qY+qZ*qZ), r01=2*(qX*qY-qW*qZ), r02=2*(qX*qZ+qW*qY);
+    const r10=2*(qX*qY+qW*qZ),   r11=1-2*(qX*qX+qZ*qZ), r12=2*(qY*qZ-qW*qX);
+    const r20=2*(qX*qZ-qW*qY),   r21=2*(qY*qZ+qW*qX),   r22=1-2*(qX*qX+qY*qY);
+
+    // Scales: exp(log_scale) — no clamping of the exponent itself
+    const s0=Math.exp(sc0[i]), s1=Math.exp(sc1[i]), s2=Math.exp(sc2[i]);
+    const s0s=s0*s0, s1s=s1*s1, s2s=s2*s2;
+
+    // M = view_rot * R_splat  (projects splat rotation to view space)
+    // R is row-major 3×3 view rotation
+    const m00=R[0]*r00+R[1]*r10+R[2]*r20;
+    const m01=R[0]*r01+R[1]*r11+R[2]*r21;
+    const m02=R[0]*r02+R[1]*r12+R[2]*r22;
+    const m10=R[3]*r00+R[4]*r10+R[5]*r20;
+    const m11=R[3]*r01+R[4]*r11+R[5]*r21;
+    const m12=R[3]*r02+R[4]*r12+R[5]*r22;
+    // We only need the top 2 rows (x and y components in view space)
+
+    // Projection Jacobian (simplified orthographic within splat extent):
+    // J_xx = J_yy = focal/depth
+    const fd=focal/depth;
+    const fd2=fd*fd;
+
+    // 2D covariance = fd² * (top-2×2 of M * diag(s0²,s1²,s2²) * M^T)
+    const c00=fd2*(m00*m00*s0s + m01*m01*s1s + m02*m02*s2s);
+    const c01=fd2*(m00*m10*s0s + m01*m11*s1s + m02*m12*s2s);
+    const c11=fd2*(m10*m10*s0s + m11*m11*s1s + m12*m12*s2s);
+
+    cov2[si*4]  =c00;
+    cov2[si*4+1]=c01;
+    cov2[si*4+2]=c11;
+    cov2[si*4+3]=0;
+  }
+
+  return {n:nv, center, cov2, wpos, norm, alb, op:opArr};
+}
+
+/* ── MAIN ───────────────────────────────────────────────────── */
+async function main() {
+  // Create and attach canvases
+  const canvL=document.createElement('canvas');
+  const canvR=document.createElement('canvas');
+  document.getElementById('pL').appendChild(canvL);
+  document.getElementById('pR').appendChild(canvR);
+
+  let rL, rR;
+  try {
+    rL=new Renderer(canvL,false);
+    rR=new Renderer(canvR,true);
+  } catch(e) {
+    statusEl.textContent=`WebGL2 Error: ${e.message}`;
+    statusEl.style.color='#f87171';
+    console.error(e);
+    return;
+  }
+
+  const camL=makeCamera(), camR=makeCamera();
+  attachOrbit(canvL,camL,camR);
+  attachOrbit(canvR,camR,camL);
+
+  // Divider
+  const divider=document.getElementById('divider');
+  const vbox=document.getElementById('vbox');
+  let divDown=false,divX0=0,divW0=0;
+  divider.addEventListener('pointerdown',e=>{
+    divDown=true; divX0=e.clientX;
+    divW0=vbox.querySelectorAll('.vpane')[0].offsetWidth;
+    divider.classList.add('dragging');
+    divider.setPointerCapture(e.pointerId);
+  });
+  divider.addEventListener('pointermove',e=>{
+    if(!divDown)return;
+    const dx=e.clientX-divX0;
+    const panes=vbox.querySelectorAll('.vpane');
+    const total=vbox.offsetWidth-4;
+    const nw=Math.max(120,Math.min(total-120,divW0+dx));
+    panes[0].style.flex='none'; panes[0].style.width=nw+'px';
+    panes[1].style.flex='1'; panes[1].style.width='';
+    onResize();
+  });
+  divider.addEventListener('pointerup',()=>{divDown=false;divider.classList.remove('dragging');});
+
+  function onResize() { rL.resize(); rR.resize(); camL.dirty=camR.dirty=true; }
+  window.addEventListener('resize',onResize);
+  onResize();
+
+  // Reset
+  document.getElementById('resetBtn').addEventListener('click',()=>{
+    const p=PRESETS.studio;
+    for(const[k,v]of Object.entries(p)){const el=document.getElementById(k);if(el)el.value=v;}
+    camL.yaw=0.4; camL.pitch=0.25; camL.zoom=10;
+    camR.yaw=0.4; camR.pitch=0.25; camR.zoom=10;
+    camL.dirty=camR.dirty=true;
+  });
+
+  // Load data
+  let data;
+  try {
+    data=await loadPLY('./Buttons.ply');
+    statusEl.textContent=`Loaded ${data.N.toLocaleString()} splats`;
+    statusEl.style.color='#34d399';
+  } catch(e) {
+    statusEl.textContent=`Load error: ${e.message}`;
+    statusEl.style.color='#f87171';
+    console.error(e);
+    return;
+  }
+
+  let prevHash='', frameCount=0, lastFPS=performance.now();
+
+  function frame() {
+    requestAnimationFrame(frame);
+    const ui=getUI();
+    const w=canvL.width, h=canvL.height;
+    const hash=`${camL.yaw.toFixed(4)},${camL.pitch.toFixed(4)},${camL.zoom.toFixed(4)},${w},${h}`;
+    if(hash!==prevHash || camL.dirty) {
+      const sorted=projectSplats(data,camL,w,h);
+      rL.upload(sorted);
+      rR.upload(sorted);
+      prevHash=hash;
+      camL.dirty=camR.dirty=false;
+    }
+    rL.render(camL,ui);
+    rR.render(camR,ui);
+
+    frameCount++;
+    const now=performance.now();
+    if(now-lastFPS>=900) {
+      const fps=Math.round(frameCount*1000/(now-lastFPS));
+      statusEl.textContent=`${data.N.toLocaleString()} splats | ${fps} FPS`;
+      frameCount=0; lastFPS=now;
+    }
+  }
+  frame();
+}
+
+main().catch(e=>{
+  document.getElementById('status').textContent=`Fatal: ${e.message}`;
+  document.getElementById('status').style.color='#f87171';
+  console.error(e);
+});
+</script>
+</body>
+</html>

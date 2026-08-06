@@ -5,7 +5,7 @@ import time
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -15,9 +15,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 PLY_PATH = Path(__file__).with_name("Buttons.ply")
 _RENDER_TIMEOUT = 300  # seconds — abort renders that take longer than this
-_PLY_LOAD_TIMEOUT = 120  # seconds — timeout for the initial PLY load
 
-# Cache parsed PLY data at module level — only loaded once.
+# Cache parsed PLY data at module level
 _cached_ply: Dict[str, np.ndarray] | None = None
 _ply_cache_lock = threading.Lock()
 _ply_load_error: Optional[Exception] = None
@@ -27,7 +26,6 @@ def _load_cached_ply() -> Dict[str, np.ndarray]:
     global _cached_ply, _ply_load_error
     if _cached_ply is None and _ply_load_error is None:
         with _ply_cache_lock:
-            # Double-check after acquiring the lock (threading pattern)
             if _cached_ply is None and _ply_load_error is None:
                 try:
                     _cached_ply = load_ply(PLY_PATH)
@@ -43,6 +41,7 @@ class RenderTimeoutError(Exception):
     """Raised when a render operation exceeds the timeout limit."""
     pass
 
+
 class TimeoutGuard:
     """Context manager that raises RenderTimeoutError if timeout is exceeded."""
     def __init__(self, start_time: float):
@@ -51,7 +50,7 @@ class TimeoutGuard:
     def check(self):
         if time.monotonic() - self.start_time > _RENDER_TIMEOUT:
             raise RenderTimeoutError(
-                f"Render timed out after {_RENDER_TIMEOUT}s — use a smaller image or reduce splat count"
+                f"Render timed out after {_RENDER_TIMEOUT}s — reduce splat count or resolution"
             )
 
     def __enter__(self):
@@ -70,7 +69,7 @@ def quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     zz = qz * z2
     xy = qx * y2
     xz = qx * z2
-    yz = qy * z2
+    yz = qy * y2
     wx = qw * x2
     wy = qw * y2
     wz = qw * z2
@@ -78,7 +77,7 @@ def quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
         [1 - (yy + zz), xy - wz, xz + wy],
         [xy + wz, 1 - (xx + zz), yz - wx],
         [xz - wy, yz + wx, 1 - (xx + yy)],
-        ], dtype=np.float32)
+    ], dtype=np.float32)
 
 
 def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
@@ -110,6 +109,32 @@ def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     values = values[:expected].reshape(vertex_count, len(property_names))
 
     props = {name: values[:, i] for i, name in enumerate(property_names)}
+    
+    # Convert Spherical Harmonics DC component (f_dc_0..2) to RGB Albedo
+    sh_c0 = 0.28209479177387814
+    props["albedo_r"] = np.clip(0.5 + props["f_dc_0"] * sh_c0, 0.0, 1.0)
+    props["albedo_g"] = np.clip(0.5 + props["f_dc_1"] * sh_c0, 0.0, 1.0)
+    props["albedo_b"] = np.clip(0.5 + props["f_dc_2"] * sh_c0, 0.0, 1.0)
+    
+    # Sigmoid opacity
+    props["opacity_sig"] = 1.0 / (1.0 + np.exp(-props["opacity"]))
+
+    # Derive unit normals from quaternions rot_0..3 if nx, ny, nz are 0
+    r0, r1, r2, r3 = props["rot_0"], props["rot_1"], props["rot_2"], props["rot_3"]
+    qlen = np.sqrt(r0**2 + r1**2 + r2**2 + r3**2)
+    qlen[qlen == 0] = 1.0
+    qx, qy, qz, qw = r0 / qlen, r1 / qlen, r2 / qlen, r3 / qlen
+    
+    derived_nx = 2.0 * (qx * qz + qw * qy)
+    derived_ny = 2.0 * (qy * qz - qw * qx)
+    derived_nz = 1.0 - 2.0 * (qx**2 + qy**2)
+
+    has_normals = (np.abs(props["nx"]).max() > 1e-3 or np.abs(props["ny"]).max() > 1e-3 or np.abs(props["nz"]).max() > 1e-3)
+    if not has_normals:
+        props["nx"] = derived_nx
+        props["ny"] = derived_ny
+        props["nz"] = derived_nz
+
     return props
 
 
@@ -117,20 +142,29 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def render_png(width: int = 1600, height: int = 1600, mode: str = "neutral", ambient: float = 0.16,
-               dir_intensity: float = 1.0, dir_x: float = 0.3, dir_y: float = 0.8, dir_z: float = 0.5,
-               dir_color: tuple = (1.0, 1.0, 1.0), point_intensity: float = 0.4,
-               point_x: float = 0.6, point_y: float = 0.9, point_z: float = 0.2,
-               point_color: tuple = (0.49, 0.82, 0.99)) -> bytes:
+def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambient: float = 0.20,
+               ambient_color: Tuple[float, float, float] = (0.8, 0.84, 0.88),
+               dir_intensity: float = 1.5, dir_x: float = 0.5, dir_y: float = 0.7, dir_z: float = 0.5,
+               dir_color: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+               point_intensity: float = 1.0, point_x: float = 1.2, point_y: float = 1.5, point_z: float = 0.8,
+               point_color: Tuple[float, float, float] = (0.22, 0.74, 0.97),
+               roughness: float = 0.30, metallic: float = 0.10, specular_gain: float = 1.2,
+               stride: int = 1) -> bytes:
     guard = TimeoutGuard(time.monotonic())
-    props = _load_cached_ply()  # Use cached PLY data instead of re-reading from disk
+    props = _load_cached_ply()
+
     positions = np.column_stack([props["x"], props["y"], props["z"]]).astype(np.float32)
     normals = np.column_stack([props["nx"], props["ny"], props["nz"]]).astype(np.float32)
-    colors = np.column_stack([props["f_dc_0"], props["f_dc_1"], props["f_dc_2"]]).astype(np.float32)
-    opacity = props["opacity"].astype(np.float32)
+    
+    # Normalize normals
+    n_norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    n_norms[n_norms == 0] = 1.0
+    normals = normals / n_norms
+
+    albedo = np.column_stack([props["albedo_r"], props["albedo_g"], props["albedo_b"]]).astype(np.float32)
+    opacity = props["opacity_sig"].astype(np.float32)
+
     scale0 = props["scale_0"].astype(np.float32)
-    scale1 = props["scale_1"].astype(np.float32)
-    scale2 = props["scale_2"].astype(np.float32)
     rot0 = props["rot_0"].astype(np.float32)
     rot1 = props["rot_1"].astype(np.float32)
     rot2 = props["rot_2"].astype(np.float32)
@@ -139,78 +173,72 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "neutral", amb
     image = np.zeros((height, width, 4), dtype=np.float32)
     yaw = -0.45
     pitch = -0.15
-    cy = math.cos(yaw)
-    sy = math.sin(yaw)
-    cx = math.cos(pitch)
-    sx = math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    cx, sx = math.cos(pitch), math.sin(pitch)
     view_rot = np.array([
         [cy, 0.0, sy],
         [sy * sx, cx, -cy * sx],
         [-sy * cx, sx, cy * cx],
     ], dtype=np.float32)
 
-    focal = min(width, height) * 0.72
-
-    # First pass: collect all splat data with depth sorting
+    focal = min(width, height) * 0.75
     n_total = len(positions)
-    max_splats = n_total  # worst case
-    
-    # Pre-allocate arrays for splat properties
+    max_splats = n_total
+
     valid_indices = []
     depths = np.zeros(max_splats, dtype=np.float32)
-    sx2_arr = np.zeros(max_splats, dtype=np.float32)
-    sy2_arr = np.zeros(max_splats, dtype=np.float32)
-    radii = np.zeros(max_splats, dtype=np.int32)
     x0s = np.zeros(max_splats, dtype=np.int32)
     y0s = np.zeros(max_splats, dtype=np.int32)
     x1s = np.zeros(max_splats, dtype=np.int32)
-    y1s = np.zeros(max_splats, dtype=np.int32)  # store y1 separately
-    weights_list = [None] * max_splats  # variable-length weight arrays per splat
-    alpha_list = [0.0] * max_splats     # per-splat alpha values
-    
+    y1s = np.zeros(max_splats, dtype=np.int32)
+    weights_list = [None] * max_splats
+    alpha_list = [0.0] * max_splats
+
+    # Normalize directional light vector
+    l_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
+    l_dir_norm = np.linalg.norm(l_dir) or 1.0
+    l_dir = l_dir / l_dir_norm
+    l_dir_col = np.array(dir_color, dtype=np.float32)
+    point_col = np.array(point_color, dtype=np.float32)
+    amb_col = np.array(ambient_color, dtype=np.float32)
+
     n_valid = 0
     for i in range(0, n_total, stride):
         if (i % 16384) == 0:
             guard.check()
         pos = positions[i]
-        normal = normals[i]
-        color = colors[i]
         alpha0 = opacity[i]
-        if alpha0 <= 0.0:
+        if alpha0 <= 0.01:
             continue
 
         view_pos = view_rot @ pos
-        depth = 2.6 + view_pos[2]
+        depth = 5.5 - view_pos[2]
         if depth <= 0.2:
             continue
-        
+
         sx2 = width * 0.5 + (view_pos[0] / depth) * focal
         sy2 = height * 0.5 - (view_pos[1] / depth) * focal
-        
-        if sx2 < -24 or sx2 > width + 24 or sy2 < -24 or sy2 > height + 24:
+
+        if sx2 < -48 or sx2 > width + 48 or sy2 < -48 or sy2 > height + 48:
             continue
 
         rot = quat_to_matrix(rot0[i], rot1[i], rot2[i], rot3[i])
-        basis_x = rot[:, 0]
-        basis_y = rot[:, 1]
-        basis_xv = view_rot @ basis_x
-        basis_yv = view_rot @ basis_y
+        basis_xv = view_rot @ rot[:, 0]
+        basis_yv = view_rot @ rot[:, 1]
         scale2d = focal / depth
         s0 = math.exp(clamp(scale0[i], -2.5, 1.6)) * 0.0025 * scale2d
-        s1 = math.exp(clamp(scale1[i], -2.5, 1.6)) * 0.0025 * scale2d
-        cov00 = (basis_xv[0] ** 2) * (s0 ** 2) + (basis_yv[0] ** 2) * (s1 ** 2)
-        cov01 = (basis_xv[0] * basis_xv[1]) * (s0 ** 2) + (basis_yv[0] * basis_yv[1]) * (s1 ** 2)
-        cov11 = (basis_xv[1] ** 2) * (s0 ** 2) + (basis_yv[1] ** 2) * (s1 ** 2)
-        cov = np.array([[cov00, cov01], [cov01, cov11]], dtype=np.float32)
-        cov += np.eye(2, dtype=np.float32) * 1e-6
 
-        try:
-            inv_cov = np.linalg.inv(cov)
-        except np.linalg.LinAlgError:
+        cov00 = (basis_xv[0] ** 2) * (s0 ** 2) + 1e-6
+        cov01 = (basis_xv[0] * basis_xv[1]) * (s0 ** 2)
+        cov11 = (basis_xv[1] ** 2) * (s0 ** 2) + 1e-6
+
+        det = cov00 * cov11 - cov01 * cov01
+        if det <= 1e-12:
             continue
 
-        eigvals = np.linalg.eigvalsh(cov)
-        radius = max(2, int(math.ceil(3.0 * math.sqrt(max(eigvals.max(), 1e-6)))))
+        inv_cov = np.array([[cov11 / det, -cov01 / det], [-cov01 / det, cov00 / det]], dtype=np.float32)
+
+        radius = max(2, int(math.ceil(3.0 * math.sqrt(max(cov00, cov11)))))
         x0 = max(0, int(math.floor(sx2 - radius)))
         x1 = min(width, int(math.ceil(sx2 + radius)))
         y0 = max(0, int(math.floor(sy2 - radius)))
@@ -225,78 +253,88 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "neutral", amb
         exponent = -0.5 * np.einsum('...i,ij,...j->...', delta, inv_cov, delta)
         weights = np.exp(np.clip(exponent, -20.0, 0.0))
 
-        # Lighting calculation
-        if mode == "relit":
-            normal = normal / (np.linalg.norm(normal) or 1.0)
-            light_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
-            light_dir = light_dir / (np.linalg.norm(light_dir) or 1.0)
-            diffuse = max(0.0, float(np.dot(normal, light_dir)))
-            
-            # Point light in world space
-            point_vec = np.array([point_x, point_y, point_z], dtype=np.float32) - pos
-            dist = np.linalg.norm(point_vec) or 1.0
-            point_vec = point_vec / dist
-            point_diff = max(0.0, float(np.dot(normal, point_vec)))
-            dist_factor = 1.0 / max(0.2, 0.25 + dist * dist * 0.08)
-            
-            dir_rgb = np.array(dir_color, dtype=np.float32)
-            point_rgb = np.array(point_color, dtype=np.float32)
-            lit = color * (ambient + 0.2) + dir_rgb * (diffuse * dir_intensity) + point_rgb * (point_diff * point_intensity * dist_factor)
-            base_rgb = np.clip(lit, 0.0, 1.0)
-        else:
-            base_rgb = np.clip(color, 0.0, 1.0)
-
-        # Store splat data for depth sorting
         valid_indices.append(i)
         depths[n_valid] = depth
-        sx2_arr[n_valid] = sx2
-        sy2_arr[n_valid] = sy2
-        radii[n_valid] = radius
         x0s[n_valid] = x0
         y0s[n_valid] = y0
         x1s[n_valid] = x1
-        y1s[n_valid] = y1  # Fixed: now storing y1 value
-        weights_list[n_valid] = weights  # variable-length, no fixed buffer limit
+        y1s[n_valid] = y1
+        weights_list[n_valid] = weights
         alpha_list[n_valid] = float(alpha0)
         n_valid += 1
 
-    # Second pass: sort splats by depth (far to near) and composite
     if n_valid > 0:
         sorted_idx = np.argsort(depths[:n_valid])[::-1]  # far to near
-        
+
         for idx in sorted_idx[:n_valid]:
             i = valid_indices[idx]
             x0, x1 = int(x0s[idx]), int(x1s[idx])
-            y0, y1 = int(y0s[idx]), int(y1s[idx])  # Fixed: now using stored y1 value
-            
-            # Ensure valid bounds
+            y0, y1 = int(y0s[idx]), int(y1s[idx])
+
             if x1 <= x0 or y1 <= y0:
                 continue
-            
-            alpha0_val = alpha_list[idx]  # use stored alpha from first pass
-            weights = weights_list[idx]    # retrieve variable-length weight array
-            alpha = np.clip(alpha0_val * 0.98 * weights, 0.0, 1.0)
-            
-            # Get RGB color for this splat
+
+            alpha0_val = alpha_list[idx]
+            weights = weights_list[idx]
+            alpha = np.clip(alpha0_val * weights, 0.0, 1.0)
+
+            # Evaluate Microfacet PBR or Neutral base
             if mode == "relit":
-                normal = normals[i] / (np.linalg.norm(normals[i]) or 1.0)
                 pos_i = positions[i]
-                light_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
-                light_dir = light_dir / (np.linalg.norm(light_dir) or 1.0)
-                diffuse = max(0.0, float(np.dot(normal, light_dir)))
-                point_vec = np.array([point_x, point_y, point_z], dtype=np.float32) - pos_i
-                dist = np.linalg.norm(point_vec) or 1.0
-                point_vec = point_vec / dist
-                point_diff = max(0.0, float(np.dot(normal, point_vec)))
-                dist_factor = 1.0 / max(0.2, 0.25 + dist * dist * 0.08)
-                dir_rgb = np.array(dir_color, dtype=np.float32)
-                point_rgb = np.array(point_color, dtype=np.float32)
-                lit = colors[i] * (ambient + 0.2) + dir_rgb * (diffuse * dir_intensity) + point_rgb * (point_diff * point_intensity * dist_factor)
+                norm_i = normals[i]
+                alb_i = albedo[i]
+
+                # Ambient
+                lit = alb_i * amb_col * ambient
+
+                # Directional light Cook-Torrance
+                ndotl = max(0.0, float(np.dot(norm_i, l_dir)))
+                if ndotl > 0 and dir_intensity > 0:
+                    v_dir = np.array([-view_rot[2, 0], -view_rot[2, 1], -view_rot[2, 2]], dtype=np.float32)
+                    v_dir = v_dir / (np.linalg.norm(v_dir) or 1.0)
+                    ndotv = max(0.001, float(np.dot(norm_i, v_dir)))
+
+                    h_dir = l_dir + v_dir
+                    h_dir = h_dir / (np.linalg.norm(h_dir) or 1.0)
+                    ndoth = max(0.0, float(np.dot(norm_i, h_dir)))
+                    vdoth = max(0.0, float(np.dot(v_dir, h_dir)))
+
+                    a2 = max(0.001, roughness * roughness) ** 2
+                    d_denom = (ndoth * ndoth * (a2 - 1.0) + 1.0)
+                    d_ggx = a2 / (math.pi * d_denom * d_denom)
+
+                    f0 = (1.0 - metallic) * 0.04 * specular_gain + metallic * alb_i
+                    fresnel = f0 + (1.0 - f0) * ((1.0 - vdoth) ** 5)
+
+                    k_smith = ((roughness + 1.0) ** 2) / 8.0
+                    g1v = ndotv / (ndotv * (1.0 - k_smith) + k_smith)
+                    g1l = ndotl / (ndotl * (1.0 - k_smith) + k_smith)
+                    g_smith = g1v * g1l
+
+                    specular = (g_smith * d_ggx) / (4.0 * ndotv * ndotl + 1e-4)
+                    spec_rgb = fresnel * specular
+
+                    kd = (1.0 - fresnel) * (1.0 - metallic)
+                    diff_rgb = (kd * alb_i / math.pi)
+
+                    lit += (diff_rgb + spec_rgb) * l_dir_col * dir_intensity * ndotl * math.pi
+
+                # Point light
+                if point_intensity > 0:
+                    p_pos = np.array([point_x, point_y, point_z], dtype=np.float32)
+                    p_vec = p_pos - pos_i
+                    p_dist = float(np.linalg.norm(p_vec)) or 1.0
+                    p_dir = p_vec / p_dist
+                    p_ndotl = max(0.0, float(np.dot(norm_i, p_dir)))
+                    if p_ndotl > 0:
+                        p_atten = 1.0 / (0.25 + p_dist * p_dist * 0.12)
+                        lit += alb_i * point_col * point_intensity * p_ndotl * p_atten
+
                 base_rgb = np.clip(lit, 0.0, 1.0)
             else:
-                base_rgb = np.clip(colors[i], 0.0, 1.0)
-            
-            # Alpha compositing with optimized vectorized approach
+                base_rgb = albedo[i]
+
+            # Vectorized alpha compositing
             for j in range(y1 - y0):
                 for k in range(x1 - x0):
                     a_new = alpha[j * (x1 - x0) + k]
@@ -321,23 +359,23 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "neutral", amb
 
 
 class RenderHandler(SimpleHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/render":
             params = parse_qs(parsed.query)
             mode = params.get("mode", ["relit"])[0]
-            ambient = float(params.get("ambient", ["0.16"])[0])
-            dir_intensity = float(params.get("dirInt", ["1.0"])[0])
-            dir_x = float(params.get("dirX", ["0.3"])[0])
-            dir_y = float(params.get("dirY", ["0.8"])[0])
+            ambient = float(params.get("ambient", ["0.20"])[0])
+            dir_intensity = float(params.get("dirInt", ["1.5"])[0])
+            dir_x = float(params.get("dirX", ["0.5"])[0])
+            dir_y = float(params.get("dirY", ["0.7"])[0])
             dir_z = float(params.get("dirZ", ["0.5"])[0])
-            point_intensity = float(params.get("pointInt", ["0.4"])[0])
-            point_x = float(params.get("pointX", ["0.6"])[0])
-            point_y = float(params.get("pointY", ["0.9"])[0])
-            point_z = float(params.get("pointZ", ["0.2"])[0])
-            dir_color = tuple(float(x) for x in params.get("dirColor", ["1,1,1"])[0].split(","))
-            point_color = tuple(float(x) for x in params.get("pointColor", ["0.49,0.82,0.99"])[0].split(","))
-            out_path = Path("rendered_neutral.png") if mode == "neutral" else Path("rendered_relit.png")
+            point_intensity = float(params.get("pointInt", ["1.0"])[0])
+            point_x = float(params.get("pointX", ["1.2"])[0])
+            point_y = float(params.get("pointY", ["1.5"])[0])
+            point_z = float(params.get("pointZ", ["0.8"])[0])
+            roughness = float(params.get("roughness", ["0.30"])[0])
+            metallic = float(params.get("metallic", ["0.10"])[0])
+
             png = render_png(
                 mode=mode,
                 ambient=ambient,
@@ -345,14 +383,13 @@ class RenderHandler(SimpleHTTPRequestHandler):
                 dir_x=dir_x,
                 dir_y=dir_y,
                 dir_z=dir_z,
-                dir_color=dir_color,
                 point_intensity=point_intensity,
                 point_x=point_x,
                 point_y=point_y,
                 point_z=point_z,
-                point_color=point_color,
+                roughness=roughness,
+                metallic=metallic,
             )
-            out_path.write_bytes(png)
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(png)))
@@ -361,7 +398,7 @@ class RenderHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
-    def log_message(self, format: str, *args) -> None:  # noqa: A003
+    def log_message(self, format: str, *args) -> None:
         return
 
 
@@ -384,4 +421,4 @@ if __name__ == "__main__":
         out.write_bytes(render_png(mode="neutral"))
         out2 = Path("rendered_relit.png")
         out2.write_bytes(render_png(mode="relit"))
-        print("wrote", out, out2)
+        print("Successfully rendered:", out, out2)
