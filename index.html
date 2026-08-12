@@ -144,6 +144,8 @@
       <div class="row"><label>Roughness ρ</label><input type=range id="rough" min=0.02 max=1 step=0.01 value=0.35><span class="val" id="roughV">0.35</span></div>
       <div class="row"><label>Metallic m</label><input type=range id="metal" min=0 max=1 step=0.01 value=0.10><span class="val" id="metalV">0.10</span></div>
       <div class="row"><label>Specular ×</label><input type=range id="spec" min=0 max=3 step=0.01 value=1.20><span class="val" id="specV">1.20</span></div>
+      <div class="row"><label>N Smooth</label><input type=range id="nSmooth" min=0 max=1 step=0.01 value=0.70><span class="val" id="nSmoothV">0.70</span></div>
+      <div class="hint" style="text-align:left;margin-top:6px">Blends noisy splat normals toward a voxel-smoothed field to reduce scratchy relighting.</div>
     </div>
     <div class="card">
       <h3>Directional Light</h3>
@@ -166,6 +168,7 @@
       <div class="row"><label>Sky Color</label><input type=color id="aCol" value="#cbd5e1"></div>
     </div>
     <div class="card">
+      <button class="btn" id="flipBtn" style="width:100%;margin-bottom:6px">⇅ Flip Upside Down</button>
       <button class="btn btn-reset" id="resetBtn">↺ Reset Camera &amp; Lighting</button>
     </div>
     <div id="status">Loading Buttons.ply…</div>
@@ -195,6 +198,7 @@ const SLIDERS = {
   aInt: { v:'aIntV',  f:v=>v.toFixed(2) },
   sep:  { v:'sepV',   f:v=>v.toFixed(2) },
   keepAO:{ v:'keepAOV', f:v=>v.toFixed(2) },
+  nSmooth:{ v:'nSmoothV', f:v=>v.toFixed(2) },
 };
 function hexRGB(hex) {
   const h=hex.replace('#','');
@@ -216,10 +220,10 @@ function getUI() {
   return s;
 }
 const PRESETS = {
-  studio:{ rough:0.35, metal:0.10, spec:1.20, dInt:1.80, dAz:45,  dEl:35, dCol:'#ffffff', pInt:1.20, pX:2.0,  pY:2.0, pZ:1.0, pCol:'#38bdf8', aInt:0.20, aCol:'#cbd5e1', sep:1.00, keepAO:0.00 },
-  sunset:{ rough:0.22, metal:0.22, spec:1.60, dInt:2.20, dAz:110, dEl:12, dCol:'#fb923c', pInt:1.50, pX:-2.0, pY:1.0, pZ:1.0, pCol:'#60a5fa', aInt:0.12, aCol:'#1e1b4b', sep:1.00, keepAO:0.15 },
-  cyber: { rough:0.10, metal:0.55, spec:2.20, dInt:1.80, dAz:-60, dEl:25, dCol:'#ec4899', pInt:3.00, pX:2.0,  pY:-1, pZ:1.0, pCol:'#06b6d4', aInt:0.08, aCol:'#0f172a', sep:1.00, keepAO:0.00 },
-  day:   { rough:0.45, metal:0.05, spec:1.00, dInt:2.80, dAz:20,  dEl:65, dCol:'#fef08a', pInt:0.50, pX:0.0,  pY:2.0, pZ:0.5, pCol:'#bae6fd', aInt:0.30, aCol:'#e2e8f0', sep:1.00, keepAO:0.25 },
+  studio:{ rough:0.35, metal:0.10, spec:1.20, dInt:1.80, dAz:45,  dEl:35, dCol:'#ffffff', pInt:1.20, pX:2.0,  pY:2.0, pZ:1.0, pCol:'#38bdf8', aInt:0.20, aCol:'#cbd5e1', sep:1.00, keepAO:0.00, nSmooth:0.70 },
+  sunset:{ rough:0.22, metal:0.22, spec:1.60, dInt:2.20, dAz:110, dEl:12, dCol:'#fb923c', pInt:1.50, pX:-2.0, pY:1.0, pZ:1.0, pCol:'#60a5fa', aInt:0.12, aCol:'#1e1b4b', sep:1.00, keepAO:0.15, nSmooth:0.75 },
+  cyber: { rough:0.10, metal:0.55, spec:2.20, dInt:1.80, dAz:-60, dEl:25, dCol:'#ec4899', pInt:3.00, pX:2.0,  pY:-1, pZ:1.0, pCol:'#06b6d4', aInt:0.08, aCol:'#0f172a', sep:1.00, keepAO:0.00, nSmooth:0.85 },
+  day:   { rough:0.45, metal:0.05, spec:1.00, dInt:2.80, dAz:20,  dEl:65, dCol:'#fef08a', pInt:0.50, pX:0.0,  pY:2.0, pZ:0.5, pCol:'#bae6fd', aInt:0.30, aCol:'#e2e8f0', sep:1.00, keepAO:0.25, nSmooth:0.65 },
 };
 document.querySelectorAll('[data-p]').forEach(btn=>btn.addEventListener('click',()=>{
   const p=PRESETS[btn.dataset.p];
@@ -263,8 +267,8 @@ function attachOrbit(canvas, cam, other) {
   });
   canvas.addEventListener('pointermove',e=>{
     if(!down)return;
-    cam.yaw   +=(e.clientX-sx)*0.005;
-    cam.pitch -=(e.clientY-sy)*0.005;
+    cam.yaw   -=(e.clientX-sx)*0.005;
+    cam.pitch +=(e.clientY-sy)*0.005;
     cam.pitch=Math.max(-PI/2+0.01, Math.min(PI/2-0.01, cam.pitch));
     sx=e.clientX; sy=e.clientY; cam.dirty=true;
     other.yaw=cam.yaw; other.pitch=cam.pitch; other.zoom=cam.zoom; other.dirty=true;
@@ -395,6 +399,104 @@ function separateLighting(px, py, pz, bakedR, bakedG, bakedB, op, N) {
   return { alR, alG, alB, irradiance };
 }
 
+/** Voxel-average + blur normals to suppress high-frequency splat orientation noise. */
+function smoothNormals(px, py, pz, nx, ny, nz, op, N, gridRes = 48) {
+  let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+  for (let i = 0; i < N; i++) {
+    if (op[i] <= 0.05) continue;
+    if (px[i]<minX)minX=px[i]; if (py[i]<minY)minY=py[i]; if (pz[i]<minZ)minZ=pz[i];
+    if (px[i]>maxX)maxX=px[i]; if (py[i]>maxY)maxY=py[i]; if (pz[i]>maxZ)maxZ=pz[i];
+  }
+  const extX = Math.max(1e-6, maxX - minX);
+  const extY = Math.max(1e-6, maxY - minY);
+  const extZ = Math.max(1e-6, maxZ - minZ);
+  const cells = gridRes * gridRes * gridRes;
+  const sx = new Float32Array(cells);
+  const sy = new Float32Array(cells);
+  const sz = new Float32Array(cells);
+  const cnt = new Float32Array(cells);
+  const flatIdx = new Int32Array(N);
+
+  for (let i = 0; i < N; i++) {
+    const ix = Math.max(0, Math.min(gridRes-1, Math.floor((px[i]-minX)/extX*(gridRes-1))));
+    const iy = Math.max(0, Math.min(gridRes-1, Math.floor((py[i]-minY)/extY*(gridRes-1))));
+    const iz = Math.max(0, Math.min(gridRes-1, Math.floor((pz[i]-minZ)/extZ*(gridRes-1))));
+    const f = ix + gridRes*(iy + gridRes*iz);
+    flatIdx[i] = f;
+    if (op[i] <= 0.05) continue;
+    // Flip into agreement with the running voxel mean so ±n don't cancel
+    let wx = nx[i], wy = ny[i], wz = nz[i];
+    if (cnt[f] > 0 && wx*sx[f] + wy*sy[f] + wz*sz[f] < 0) {
+      wx = -wx; wy = -wy; wz = -wz;
+    }
+    sx[f] += wx; sy[f] += wy; sz[f] += wz;
+    cnt[f] += 1;
+  }
+
+  for (let i = 0; i < cells; i++) {
+    if (cnt[i] <= 0) continue;
+    const inv = 1 / Math.sqrt(sx[i]*sx[i] + sy[i]*sy[i] + sz[i]*sz[i] || 1e-8);
+    sx[i] *= inv; sy[i] *= inv; sz[i] *= inv;
+  }
+
+  function blurField(src) {
+    const out = new Float32Array(cells * 3);
+    for (let z = 0; z < gridRes; z++) {
+      for (let y = 0; y < gridRes; y++) {
+        for (let x = 0; x < gridRes; x++) {
+          let ax=0, ay=0, az=0, n=0;
+          for (let dz = -1; dz <= 1; dz++) {
+            const zz = z + dz; if (zz < 0 || zz >= gridRes) continue;
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = y + dy; if (yy < 0 || yy >= gridRes) continue;
+              for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx; if (xx < 0 || xx >= gridRes) continue;
+                const f = xx + gridRes*(yy + gridRes*zz);
+                if (cnt[f] <= 0) continue;
+                let vx = src[f*3], vy = src[f*3+1], vz = src[f*3+2];
+                if (n > 0 && ax*vx + ay*vy + az*vz < 0) { vx=-vx; vy=-vy; vz=-vz; }
+                ax += vx; ay += vy; az += vz; n++;
+              }
+            }
+          }
+          const o = (x + gridRes*(y + gridRes*z)) * 3;
+          if (n > 0) {
+            const inv = 1 / Math.sqrt(ax*ax + ay*ay + az*az || 1e-8);
+            out[o]=ax*inv; out[o+1]=ay*inv; out[o+2]=az*inv;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Pack grid normals as xyz interleaved for blur
+  let packed = new Float32Array(cells * 3);
+  for (let i = 0; i < cells; i++) {
+    packed[i*3]=sx[i]; packed[i*3+1]=sy[i]; packed[i*3+2]=sz[i];
+  }
+  packed = blurField(packed);
+  packed = blurField(packed);
+
+  const nsx = new Float32Array(N);
+  const nsy = new Float32Array(N);
+  const nsz = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const f = flatIdx[i];
+    let sxn = packed[f*3], syn = packed[f*3+1], szn = packed[f*3+2];
+    // If voxel empty, fall back to raw
+    if (sxn*sxn + syn*syn + szn*szn < 1e-6) {
+      sxn = nx[i]; syn = ny[i]; szn = nz[i];
+    }
+    // Keep smoothed normal in same hemisphere as raw splat normal
+    if (sxn*nx[i] + syn*ny[i] + szn*nz[i] < 0) {
+      sxn = -sxn; syn = -syn; szn = -szn;
+    }
+    nsx[i]=sxn; nsy[i]=syn; nsz[i]=szn;
+  }
+  return { nsx, nsy, nsz };
+}
+
 async function loadPLY(url) {
   statusEl.textContent='Fetching Buttons.ply…';
   const resp = await fetch(url);
@@ -496,6 +598,10 @@ async function loadPLY(url) {
     }
   }
 
+  statusEl.textContent='Smoothing surface normals…';
+  await new Promise(r=>setTimeout(r,0));
+  const { nsx, nsy, nsz } = smoothNormals(px, py, pz, nx, ny, nz, op, realN);
+
   statusEl.textContent='Separating baked lighting from albedo…';
   await new Promise(r=>setTimeout(r,0));
   const sep = separateLighting(px, py, pz, bakedR, bakedG, bakedB, op, realN);
@@ -507,7 +613,9 @@ async function loadPLY(url) {
     // Original SH-DC appearance (lighting still baked in)
     bakedR, bakedG, bakedB,
     irradiance: sep.irradiance,
-    op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz
+    op, sc0,sc1,sc2, qw,qx,qy,qz,
+    nx,ny,nz,           // raw per-splat normals
+    nsx,nsy,nsz,        // voxel-smoothed normals
   };
 }
 
@@ -521,7 +629,8 @@ in vec2 aCorner;
 in vec2  aCenter;
 in vec4  aCov2D;
 in vec3  aWorldPos;
-in vec3  aNormal;
+in vec3  aNormal;      // raw splat normal
+in vec3  aNormalSm;    // voxel-smoothed normal
 in vec3  aAlbedo;      // intrinsic albedo (lighting removed)
 in vec3  aBaked;       // original SH-DC appearance (lighting baked in)
 in float aIrradiance;  // estimated baked irradiance / AO
@@ -533,6 +642,7 @@ out vec2  vUV;
 out mat2  vInvCov;
 out vec3  vWorldPos;
 out vec3  vNormal;
+out vec3  vNormalSm;
 out vec3  vAlbedo;
 out vec3  vBaked;
 out float vIrradiance;
@@ -546,7 +656,7 @@ void main() {
   if (det < 1e-6) {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
     vUV = vec2(0.0); vInvCov = mat2(1.0);
-    vWorldPos = vec3(0.0); vNormal = vec3(0.0,0.0,1.0);
+    vWorldPos = vec3(0.0); vNormal = vec3(0.0,0.0,1.0); vNormalSm = vec3(0.0,0.0,1.0);
     vAlbedo = vec3(0.0); vBaked = vec3(0.0); vIrradiance = 1.0; vOpacity = 0.0;
     return;
   }
@@ -562,6 +672,7 @@ void main() {
   vUV         = pixOff;
   vWorldPos   = aWorldPos;
   vNormal     = aNormal;
+  vNormalSm   = aNormalSm;
   vAlbedo     = aAlbedo;
   vBaked      = aBaked;
   vIrradiance = aIrradiance;
@@ -579,6 +690,7 @@ in vec2  vUV;
 in mat2  vInvCov;
 in vec3  vWorldPos;
 in vec3  vNormal;
+in vec3  vNormalSm;
 in vec3  vAlbedo;
 in vec3  vBaked;
 in float vIrradiance;
@@ -603,6 +715,7 @@ in vec2  vUV;
 in mat2  vInvCov;
 in vec3  vWorldPos;
 in vec3  vNormal;
+in vec3  vNormalSm;
 in vec3  vAlbedo;
 in vec3  vBaked;
 in float vIrradiance;
@@ -613,8 +726,9 @@ uniform vec3  uAmbCol;   uniform float uAmbInt;
 uniform vec3  uDirDir;   uniform vec3  uDirCol;   uniform float uDirInt;
 uniform vec3  uPtPos;    uniform vec3  uPtCol;    uniform float uPtInt;
 uniform float uRough;    uniform float uMetal;    uniform float uSpec;
-uniform float uSep;      // 0 = use baked as albedo (old wrong path), 1 = full separation
-uniform float uKeepAO;   // re-multiply estimated baked irradiance after shading
+uniform float uSep;
+uniform float uKeepAO;
+uniform float uNSmooth;
 uniform int   uGBuf;
 
 out vec4 fragColor;
@@ -652,7 +766,10 @@ void main() {
   float alpha = vOpacity * exp(-0.5 * maha);
   if (alpha < 0.003) discard;
 
-  vec3 N = normalize(vNormal);
+  vec3 Nraw = normalize(vNormal);
+  vec3 Nsm  = normalize(vNormalSm);
+  if (dot(Nsm, Nraw) < 0.0) Nsm = -Nsm;
+  vec3 N = normalize(mix(Nraw, Nsm, clamp(uNSmooth, 0.0, 1.0)));
   vec3 V = normalize(uCamPos - vWorldPos);
 
   // Blend toward intrinsic albedo as separation increases
@@ -743,6 +860,7 @@ class Renderer {
     this.bufs={
       center:gl.createBuffer(), cov2:gl.createBuffer(),
       wpos:gl.createBuffer(),   norm:gl.createBuffer(),
+      normSm:gl.createBuffer(),
       alb:gl.createBuffer(),    baked:gl.createBuffer(),
       irr:gl.createBuffer(),    op:gl.createBuffer(),
     };
@@ -774,6 +892,7 @@ class Renderer {
     this._attr(prog,'aCov2D',  this.bufs.cov2,  4);
     this._attr(prog,'aWorldPos',this.bufs.wpos,  3);
     this._attr(prog,'aNormal', this.bufs.norm,  3);
+    this._attr(prog,'aNormalSm', this.bufs.normSm, 3);
     this._attr(prog,'aAlbedo', this.bufs.alb,   3);
     this._attr(prog,'aBaked',  this.bufs.baked, 3);
     this._attr(prog,'aIrradiance', this.bufs.irr, 1);
@@ -788,6 +907,7 @@ class Renderer {
     up(this.bufs.cov2,   data.cov2);
     up(this.bufs.wpos,   data.wpos);
     up(this.bufs.norm,   data.norm);
+    up(this.bufs.normSm, data.normSm);
     up(this.bufs.alb,    data.alb);
     up(this.bufs.baked,  data.baked);
     up(this.bufs.irr,    data.irr);
@@ -820,6 +940,7 @@ class Renderer {
       gl.uniform3f(u('uPtPos'),ui.pX,ui.pY,ui.pZ); gl.uniform3fv(u('uPtCol'),ui.pCol); gl.uniform1f(u('uPtInt'),ui.pInt);
       gl.uniform1f(u('uRough'),ui.rough); gl.uniform1f(u('uMetal'),ui.metal); gl.uniform1f(u('uSpec'),ui.spec);
       gl.uniform1f(u('uSep'),ui.sep); gl.uniform1f(u('uKeepAO'),ui.keepAO);
+      gl.uniform1f(u('uNSmooth'),ui.nSmooth);
       gl.uniform1i(u('uGBuf'),ui.gbuf);
     }
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,this.N);
@@ -828,10 +949,14 @@ class Renderer {
 }
 
 /* ── CPU PROJECTION + SORT ──────────────────────────────────── */
+// modelFlipX: 180° about X → (x,y,z)→(x,-y,-z). Orbit alone cannot invert the model.
+let modelFlipX = false;
+
 // Projects 3D splats to screen space, depth-sorts them (far→near),
 // and returns packed GPU arrays ready for upload.
 function projectSplats(data, cam, w, h) {
-  const {N, px,py,pz, alR,alG,alB, bakedR,bakedG,bakedB, irradiance, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz} = data;
+  const {N, px,py,pz, alR,alG,alB, bakedR,bakedG,bakedB, irradiance, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz, nsx,nsy,nsz} = data;
+  const flip = modelFlipX;
 
   // Camera matrices
   const R = camR(cam);
@@ -848,8 +973,11 @@ function projectSplats(data, cam, w, h) {
   for (let i=0; i<N; i++) {
     if (op[i] < 0.003) continue;
 
+    let wx=px[i], wy=py[i], wz=pz[i];
+    if (flip) { wy=-wy; wz=-wz; }
+
     // World → view
-    const dx=px[i]-cp[0], dy=py[i]-cp[1], dz=pz[i]-cp[2];
+    const dx=wx-cp[0], dy=wy-cp[1], dz=wz-cp[2];
     const vx=R[0]*dx+R[1]*dy+R[2]*dz;
     const vy=R[3]*dx+R[4]*dy+R[5]*dz;
     const vz=R[6]*dx+R[7]*dy+R[8]*dz;
@@ -877,6 +1005,7 @@ function projectSplats(data, cam, w, h) {
   const cov2  =new Float32Array(nv*4);
   const wpos  =new Float32Array(nv*3);
   const norm  =new Float32Array(nv*3);
+  const normSm=new Float32Array(nv*3);
   const alb   =new Float32Array(nv*3);
   const baked =new Float32Array(nv*3);
   const irr   =new Float32Array(nv);
@@ -885,8 +1014,17 @@ function projectSplats(data, cam, w, h) {
   for (let si=0; si<nv; si++) {
     const oi=order[si], i=idxs[oi];
 
+    let wx=px[i], wy=py[i], wz=pz[i];
+    let nnx=nx[i], nny=ny[i], nnz=nz[i];
+    let snx=nsx[i], sny=nsy[i], snz=nsz[i];
+    if (flip) {
+      wy=-wy; wz=-wz;
+      nny=-nny; nnz=-nnz;
+      sny=-sny; snz=-snz;
+    }
+
     // View-space position (recompute)
-    const dx=px[i]-cp[0], dy=py[i]-cp[1], dz=pz[i]-cp[2];
+    const dx=wx-cp[0], dy=wy-cp[1], dz=wz-cp[2];
     const vx=R[0]*dx+R[1]*dy+R[2]*dz;
     const vy=R[3]*dx+R[4]*dy+R[5]*dz;
     const vz=R[6]*dx+R[7]*dy+R[8]*dz;
@@ -899,8 +1037,9 @@ function projectSplats(data, cam, w, h) {
     center[si*2+1] = 1.0-(sy/hh);
 
     // World pos for lighting
-    wpos[si*3]=px[i]; wpos[si*3+1]=py[i]; wpos[si*3+2]=pz[i];
-    norm[si*3]=nx[i]; norm[si*3+1]=ny[i]; norm[si*3+2]=nz[i];
+    wpos[si*3]=wx; wpos[si*3+1]=wy; wpos[si*3+2]=wz;
+    norm[si*3]=nnx; norm[si*3+1]=nny; norm[si*3+2]=nnz;
+    normSm[si*3]=snx; normSm[si*3+1]=sny; normSm[si*3+2]=snz;
     alb[si*3]=alR[i]; alb[si*3+1]=alG[i]; alb[si*3+2]=alB[i];
     baked[si*3]=bakedR[i]; baked[si*3+1]=bakedG[i]; baked[si*3+2]=bakedB[i];
     irr[si]=irradiance[i];
@@ -909,9 +1048,14 @@ function projectSplats(data, cam, w, h) {
     // ── 2D Covariance projection ──────────────────────────────
     // Build R_splat from quaternion (q = [w,x,y,z])
     const qW=qw[i], qX=qx[i], qY=qy[i], qZ=qz[i];
-    const r00=1-2*(qY*qY+qZ*qZ), r01=2*(qX*qY-qW*qZ), r02=2*(qX*qZ+qW*qY);
-    const r10=2*(qX*qY+qW*qZ),   r11=1-2*(qX*qX+qZ*qZ), r12=2*(qY*qZ-qW*qX);
-    const r20=2*(qX*qZ-qW*qY),   r21=2*(qY*qZ+qW*qX),   r22=1-2*(qX*qX+qY*qY);
+    let r00=1-2*(qY*qY+qZ*qZ), r01=2*(qX*qY-qW*qZ), r02=2*(qX*qZ+qW*qY);
+    let r10=2*(qX*qY+qW*qZ),   r11=1-2*(qX*qX+qZ*qZ), r12=2*(qY*qZ-qW*qX);
+    let r20=2*(qX*qZ-qW*qY),   r21=2*(qY*qZ+qW*qX),   r22=1-2*(qX*qX+qY*qY);
+    // Apply same 180° X flip to splat orientation
+    if (flip) {
+      r10=-r10; r11=-r11; r12=-r12;
+      r20=-r20; r21=-r21; r22=-r22;
+    }
 
     // Scales: exp(log_scale) — no clamping of the exponent itself
     const s0=Math.exp(sc0[i]), s1=Math.exp(sc1[i]), s2=Math.exp(sc2[i]);
@@ -943,7 +1087,7 @@ function projectSplats(data, cam, w, h) {
     cov2[si*4+3]=0;
   }
 
-  return {n:nv, center, cov2, wpos, norm, alb, baked, irr, op:opArr};
+  return {n:nv, center, cov2, wpos, norm, normSm, alb, baked, irr, op:opArr};
 }
 
 /* ── MAIN ───────────────────────────────────────────────────── */
@@ -1001,6 +1145,16 @@ async function main() {
     for(const[k,v]of Object.entries(p)){const el=document.getElementById(k);if(el)el.value=v;}
     camL.yaw=0.4; camL.pitch=0.25; camL.zoom=10;
     camR.yaw=0.4; camR.pitch=0.25; camR.zoom=10;
+    modelFlipX=false;
+    document.getElementById('flipBtn').textContent='⇅ Flip Upside Down';
+    camL.dirty=camR.dirty=true;
+  });
+
+  document.getElementById('flipBtn').addEventListener('click',()=>{
+    modelFlipX=!modelFlipX;
+    document.getElementById('flipBtn').textContent=modelFlipX
+      ? '⇅ Flip Right-Side Up'
+      : '⇅ Flip Upside Down';
     camL.dirty=camR.dirty=true;
   });
 
@@ -1023,7 +1177,7 @@ async function main() {
     requestAnimationFrame(frame);
     const ui=getUI();
     const w=canvL.width, h=canvL.height;
-    const hash=`${camL.yaw.toFixed(4)},${camL.pitch.toFixed(4)},${camL.zoom.toFixed(4)},${w},${h}`;
+    const hash=`${camL.yaw.toFixed(4)},${camL.pitch.toFixed(4)},${camL.zoom.toFixed(4)},${w},${h},${modelFlipX?1:0}`;
     if(hash!==prevHash || camL.dirty) {
       const sorted=projectSplats(data,camL,w,h);
       rL.upload(sorted);
