@@ -101,26 +101,34 @@
 <div id="app">
   <div class="vbox" id="vbox">
     <div class="vpane" id="pL">
-      <div class="badge"><span class="dot" style="background:#a7f3d0"></span>Neutral — Original SH</div>
+      <div class="badge"><span class="dot" style="background:#a7f3d0"></span>Baked — SH appearance (lit)</div>
     </div>
     <div id="divider"></div>
     <div class="vpane" id="pR">
-      <div class="badge"><span class="dot" style="background:#38bdf8"></span>Relit — Cook-Torrance PBR</div>
+      <div class="badge"><span class="dot" style="background:#38bdf8"></span>Relit — Intrinsic albedo × new lights</div>
     </div>
   </div>
   <div id="sidebar">
     <div>
       <div class="h1">3DGS Relighting</div>
-      <div class="sub">True 2D Gaussian Rasterizer · Microfacet PBR</div>
+      <div class="sub">Intrinsic albedo factorization · Microfacet PBR</div>
     </div>
     <div class="card">
       <h3>G-Buffer Mode</h3>
       <select id="gbuf">
-        <option value="0">Full Cook-Torrance PBR</option>
-        <option value="1">Albedo (SH DC)</option>
-        <option value="2">Surface Normals</option>
-        <option value="3">Specular Only</option>
+        <option value="0">Relit (Intrinsic × New Lights)</option>
+        <option value="1">Intrinsic Albedo</option>
+        <option value="2">Baked Appearance (SH DC)</option>
+        <option value="3">Baked Irradiance / AO</option>
+        <option value="4">Surface Normals</option>
+        <option value="5">Specular Only</option>
       </select>
+    </div>
+    <div class="card">
+      <h3>Lighting Separation</h3>
+      <div class="row"><label>Separate</label><input type=range id="sep" min=0 max=1 step=0.01 value=1.00><span class="val" id="sepV">1.00</span></div>
+      <div class="row"><label>Keep AO</label><input type=range id="keepAO" min=0 max=1 step=0.01 value=0.00><span class="val" id="keepAOV">0.00</span></div>
+      <div class="hint" style="text-align:left;margin-top:6px">Separate strips baked shading from SH color. Keep AO re-multiplies contact shadows after relight.</div>
     </div>
     <div class="card">
       <h3>Presets</h3>
@@ -185,6 +193,8 @@ const SLIDERS = {
   pY:   { v:'pYV',    f:v=>v.toFixed(2) },
   pZ:   { v:'pZV',    f:v=>v.toFixed(2) },
   aInt: { v:'aIntV',  f:v=>v.toFixed(2) },
+  sep:  { v:'sepV',   f:v=>v.toFixed(2) },
+  keepAO:{ v:'keepAOV', f:v=>v.toFixed(2) },
 };
 function hexRGB(hex) {
   const h=hex.replace('#','');
@@ -206,10 +216,10 @@ function getUI() {
   return s;
 }
 const PRESETS = {
-  studio:{ rough:0.35, metal:0.10, spec:1.20, dInt:1.80, dAz:45,  dEl:35, dCol:'#ffffff', pInt:1.20, pX:2.0,  pY:2.0, pZ:1.0, pCol:'#38bdf8', aInt:0.20, aCol:'#cbd5e1' },
-  sunset:{ rough:0.22, metal:0.22, spec:1.60, dInt:2.20, dAz:110, dEl:12, dCol:'#fb923c', pInt:1.50, pX:-2.0, pY:1.0, pZ:1.0, pCol:'#60a5fa', aInt:0.12, aCol:'#1e1b4b' },
-  cyber: { rough:0.10, metal:0.55, spec:2.20, dInt:1.80, dAz:-60, dEl:25, dCol:'#ec4899', pInt:3.00, pX:2.0,  pY:-1, pZ:1.0, pCol:'#06b6d4', aInt:0.08, aCol:'#0f172a' },
-  day:   { rough:0.45, metal:0.05, spec:1.00, dInt:2.80, dAz:20,  dEl:65, dCol:'#fef08a', pInt:0.50, pX:0.0,  pY:2.0, pZ:0.5, pCol:'#bae6fd', aInt:0.30, aCol:'#e2e8f0' },
+  studio:{ rough:0.35, metal:0.10, spec:1.20, dInt:1.80, dAz:45,  dEl:35, dCol:'#ffffff', pInt:1.20, pX:2.0,  pY:2.0, pZ:1.0, pCol:'#38bdf8', aInt:0.20, aCol:'#cbd5e1', sep:1.00, keepAO:0.00 },
+  sunset:{ rough:0.22, metal:0.22, spec:1.60, dInt:2.20, dAz:110, dEl:12, dCol:'#fb923c', pInt:1.50, pX:-2.0, pY:1.0, pZ:1.0, pCol:'#60a5fa', aInt:0.12, aCol:'#1e1b4b', sep:1.00, keepAO:0.15 },
+  cyber: { rough:0.10, metal:0.55, spec:2.20, dInt:1.80, dAz:-60, dEl:25, dCol:'#ec4899', pInt:3.00, pX:2.0,  pY:-1, pZ:1.0, pCol:'#06b6d4', aInt:0.08, aCol:'#0f172a', sep:1.00, keepAO:0.00 },
+  day:   { rough:0.45, metal:0.05, spec:1.00, dInt:2.80, dAz:20,  dEl:65, dCol:'#fef08a', pInt:0.50, pX:0.0,  pY:2.0, pZ:0.5, pCol:'#bae6fd', aInt:0.30, aCol:'#e2e8f0', sep:1.00, keepAO:0.25 },
 };
 document.querySelectorAll('[data-p]').forEach(btn=>btn.addEventListener('click',()=>{
   const p=PRESETS[btn.dataset.p];
@@ -269,6 +279,122 @@ function attachOrbit(canvas, cam, other) {
 }
 
 /* ── PLY LOADER ──────────────────────────────────────────────── */
+function quatAxes(qW, qX, qY, qZ) {
+  // Columns of rotation matrix R(q) — principal axes of the Gaussian
+  return [
+    [1-2*(qY*qY+qZ*qZ), 2*(qX*qY+qW*qZ), 2*(qX*qZ-qW*qY)],
+    [2*(qX*qY-qW*qZ),   1-2*(qX*qX+qZ*qZ), 2*(qY*qZ+qW*qX)],
+    [2*(qX*qZ+qW*qY),   2*(qY*qZ-qW*qX),   1-2*(qX*qX+qY*qY)],
+  ];
+}
+
+/**
+ * Separate baked illumination from intrinsic albedo.
+ *
+ * A standard 3DGS PLY stores SH coefficients of *outgoing radiance*, not BRDF
+ * albedo. Treating SH DC as albedo and multiplying new lights only scales the
+ * already-lit appearance (intensity knobs), it does not disentangle lighting.
+ *
+ * From a single baked PLY (no multi-view images) we cannot run full inverse
+ * rendering. Instead we use a 3D Retinex prior that matches what is actually
+ * baked into this asset:
+ *   - Higher-order SH (f_rest) is discarded → strips view-dependent specular
+ *   - Spatially smooth log-luminance ≈ baked irradiance / AO / soft shadows
+ *   - appearance ≈ albedo × irradiance  ⇒  albedo = appearance / E^sep
+ *
+ * Analysis of Buttons.ply: luminance is almost uncorrelated with normals
+ * (directional light is weak in DC) but has clear spatial low-frequency
+ * shading — so voxel Retinex is the right separator here.
+ */
+function separateLighting(px, py, pz, bakedR, bakedG, bakedB, op, N) {
+  const lum = new Float32Array(N);
+  let lumSum = 0, lumCount = 0;
+  for (let i = 0; i < N; i++) {
+    const y = Math.max(1e-4, 0.2126*bakedR[i] + 0.7152*bakedG[i] + 0.0722*bakedB[i]);
+    lum[i] = y;
+    if (op[i] > 0.05) { lumSum += Math.log(y); lumCount++; }
+  }
+  const globalLog = lumCount ? lumSum / lumCount : Math.log(0.4);
+
+  let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+  for (let i = 0; i < N; i++) {
+    if (op[i] <= 0.05) continue;
+    if (px[i]<minX)minX=px[i]; if (py[i]<minY)minY=py[i]; if (pz[i]<minZ)minZ=pz[i];
+    if (px[i]>maxX)maxX=px[i]; if (py[i]>maxY)maxY=py[i]; if (pz[i]>maxZ)maxZ=pz[i];
+  }
+  const res = 40;
+  const cells = res * res * res;
+  const extX = Math.max(1e-6, maxX - minX);
+  const extY = Math.max(1e-6, maxY - minY);
+  const extZ = Math.max(1e-6, maxZ - minZ);
+  const sumLog = new Float32Array(cells);
+  const cnt = new Float32Array(cells);
+  const flatIdx = new Int32Array(N);
+
+  for (let i = 0; i < N; i++) {
+    const ix = Math.max(0, Math.min(res-1, Math.floor((px[i]-minX)/extX*(res-1))));
+    const iy = Math.max(0, Math.min(res-1, Math.floor((py[i]-minY)/extY*(res-1))));
+    const iz = Math.max(0, Math.min(res-1, Math.floor((pz[i]-minZ)/extZ*(res-1))));
+    const f = ix + res*(iy + res*iz);
+    flatIdx[i] = f;
+    if (op[i] > 0.05) {
+      sumLog[f] += Math.log(lum[i]);
+      cnt[f] += 1;
+    }
+  }
+
+  let grid = new Float32Array(cells);
+  for (let i = 0; i < cells; i++) grid[i] = cnt[i] > 0 ? sumLog[i]/cnt[i] : globalLog;
+
+  // Two passes of 5³ box blur on the log-irradiance volume (Retinex low-pass)
+  function blurLog(src) {
+    const out = new Float32Array(cells);
+    for (let z = 0; z < res; z++) {
+      for (let y = 0; y < res; y++) {
+        for (let x = 0; x < res; x++) {
+          let s = 0, n = 0;
+          for (let dz = -2; dz <= 2; dz++) {
+            const zz = z + dz; if (zz < 0 || zz >= res) continue;
+            for (let dy = -2; dy <= 2; dy++) {
+              const yy = y + dy; if (yy < 0 || yy >= res) continue;
+              for (let dx = -2; dx <= 2; dx++) {
+                const xx = x + dx; if (xx < 0 || xx >= res) continue;
+                s += src[xx + res*(yy + res*zz)];
+                n++;
+              }
+            }
+          }
+          out[x + res*(y + res*z)] = s / n;
+        }
+      }
+    }
+    return out;
+  }
+  grid = blurLog(blurLog(grid));
+
+  const irradiance = new Float32Array(N);
+  const samples = [];
+  for (let i = 0; i < N; i++) {
+    irradiance[i] = Math.exp(grid[flatIdx[i]]);
+    if (op[i] > 0.05) samples.push(irradiance[i]);
+  }
+  samples.sort((a,b)=>a-b);
+  const median = samples.length ? samples[samples.length>>1] : 1;
+  const invMed = 1 / Math.max(1e-6, median);
+  for (let i = 0; i < N; i++) irradiance[i] = Math.max(0.05, irradiance[i] * invMed);
+
+  // Intrinsic albedo under white-illuminant assumption: chrominance preserved,
+  // intensity divided by estimated irradiance.
+  const alR = new Float32Array(N), alG = new Float32Array(N), alB = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const invE = 1 / irradiance[i];
+    alR[i] = Math.max(0, Math.min(1, bakedR[i] * invE));
+    alG[i] = Math.max(0, Math.min(1, bakedG[i] * invE));
+    alB[i] = Math.max(0, Math.min(1, bakedB[i] * invE));
+  }
+  return { alR, alG, alB, irradiance };
+}
+
 async function loadPLY(url) {
   statusEl.textContent='Fetching Buttons.ply…';
   const resp = await fetch(url);
@@ -307,7 +433,7 @@ async function loadPLY(url) {
   // [148]rot_0 [152]rot_1 [156]rot_2 [160]rot_3
 
   const px=new Float32Array(N), py=new Float32Array(N), pz=new Float32Array(N);
-  const alR=new Float32Array(N), alG=new Float32Array(N), alB=new Float32Array(N);
+  const bakedR=new Float32Array(N), bakedG=new Float32Array(N), bakedB=new Float32Array(N);
   const op=new Float32Array(N);
   const sc0=new Float32Array(N), sc1=new Float32Array(N), sc2=new Float32Array(N);
   const qw=new Float32Array(N), qx=new Float32Array(N), qy=new Float32Array(N), qz=new Float32Array(N);
@@ -316,22 +442,23 @@ async function loadPLY(url) {
   const available = Math.floor((buf.byteLength - dataStart) / STRIDE);
   const realN = Math.min(N, available);
 
+  let cx=0, cy=0, cz=0, ccount=0;
   for(let i=0;i<realN;i++) {
     const b=i*STRIDE;
     px[i]=dv.getFloat32(b+0,true);
     py[i]=dv.getFloat32(b+4,true);
     pz[i]=dv.getFloat32(b+8,true);
 
-    // SH DC → linear albedo (clamped to [0,1])
-    alR[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+24,true)*SH_C0));
-    alG[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+28,true)*SH_C0));
-    alB[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+32,true)*SH_C0));
+    // SH DC → baked linear appearance (NOT albedo — lighting is still inside)
+    bakedR[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+24,true)*SH_C0));
+    bakedG[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+28,true)*SH_C0));
+    bakedB[i]=Math.max(0,Math.min(1, 0.5+dv.getFloat32(b+32,true)*SH_C0));
 
     // Sigmoid opacity
     const oRaw=dv.getFloat32(b+132,true);
     op[i]=1.0/(1.0+Math.exp(-Math.max(-20,Math.min(20,oRaw))));
 
-    // Scales (log space, keep raw for exp)
+    // Scales (log space)
     sc0[i]=dv.getFloat32(b+136,true);
     sc1[i]=dv.getFloat32(b+140,true);
     sc2[i]=dv.getFloat32(b+144,true);
@@ -345,83 +472,106 @@ async function loadPLY(url) {
     const qW=r0/qlen, qX=r1/qlen, qY=r2/qlen, qZ=r3/qlen;
     qw[i]=qW; qx[i]=qX; qy[i]=qY; qz[i]=qZ;
 
-    // Surface normal = z-column of rotation matrix R(q):
-    //   R[:,2] = [2(xz+wy),  2(yz-wx),  1-2(x²+y²)]
-    const nnx=2*(qX*qZ+qW*qY);
-    const nny=2*(qY*qZ-qW*qX);
-    const nnz=1-2*(qX*qX+qY*qY);
+    // Normal = shortest principal axis (surface-like flattening prior from the paper)
+    const axes = quatAxes(qW, qX, qY, qZ);
+    const s0=Math.exp(sc0[i]), s1=Math.exp(sc1[i]), s2=Math.exp(sc2[i]);
+    let axis = 0;
+    if (s1 <= s0 && s1 <= s2) axis = 1;
+    else if (s2 <= s0 && s2 <= s1) axis = 2;
+    let nnx=axes[axis][0], nny=axes[axis][1], nnz=axes[axis][2];
     const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
     nx[i]=nnx/nl; ny[i]=nny/nl; nz[i]=nnz/nl;
+
+    if (op[i] > 0.05) { cx+=px[i]; cy+=py[i]; cz+=pz[i]; ccount++; }
   }
 
-  return {N:realN, px,py,pz, alR,alG,alB, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz};
+  // Orient normals outward from scene centroid (consistent hemisphere for shading)
+  if (ccount > 0) {
+    cx/=ccount; cy/=ccount; cz/=ccount;
+    for (let i=0;i<realN;i++) {
+      const ox=px[i]-cx, oy=py[i]-cy, oz=pz[i]-cz;
+      if (nx[i]*ox + ny[i]*oy + nz[i]*oz < 0) {
+        nx[i]=-nx[i]; ny[i]=-ny[i]; nz[i]=-nz[i];
+      }
+    }
+  }
+
+  statusEl.textContent='Separating baked lighting from albedo…';
+  await new Promise(r=>setTimeout(r,0));
+  const sep = separateLighting(px, py, pz, bakedR, bakedG, bakedB, op, realN);
+
+  return {
+    N:realN, px,py,pz,
+    // Intrinsic albedo (lighting removed) — used for true relighting
+    alR:sep.alR, alG:sep.alG, alB:sep.alB,
+    // Original SH-DC appearance (lighting still baked in)
+    bakedR, bakedG, bakedB,
+    irradiance: sep.irradiance,
+    op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz
+  };
 }
 
 /* ── SHADERS ─────────────────────────────────────────────────── */
 // Single vertex shader for both neutral and relit modes.
 // Each splat is an instanced quad (TRIANGLE_STRIP, 4 vertices).
-// Per-instance data: center NDC, 2D screen-space covariance, world pos, normal, albedo, opacity.
 const VERT = `#version 300 es
 precision highp float;
 
-// Per-vertex (quad corner)
-in vec2 aCorner;       // (-1,-1), (1,-1), (-1,1), (1,1)
+in vec2 aCorner;
+in vec2  aCenter;
+in vec4  aCov2D;
+in vec3  aWorldPos;
+in vec3  aNormal;
+in vec3  aAlbedo;      // intrinsic albedo (lighting removed)
+in vec3  aBaked;       // original SH-DC appearance (lighting baked in)
+in float aIrradiance;  // estimated baked irradiance / AO
+in float aOpacity;
 
-// Per-instance (one per splat)
-in vec2  aCenter;      // NDC screen center [-1..1]
-in vec4  aCov2D;       // (c00, c01, c11, unused) in pixel² — the 2D screen-space covariance
-in vec3  aWorldPos;    // world position for lighting
-in vec3  aNormal;      // surface normal in world space
-in vec3  aAlbedo;      // linear albedo
-in float aOpacity;     // sigmoid opacity
+uniform vec2  uViewport;
 
-uniform vec2  uViewport;  // canvas size in pixels
-
-out vec2  vUV;        // pixel offset from splat centre (for Gaussian eval)
-out mat2  vInvCov;    // 2x2 inverse of screen-space cov (pixel⁻²)
+out vec2  vUV;
+out mat2  vInvCov;
 out vec3  vWorldPos;
 out vec3  vNormal;
 out vec3  vAlbedo;
+out vec3  vBaked;
+out float vIrradiance;
 out float vOpacity;
 
 void main() {
-  // Regularise covariance
   float c00 = aCov2D.x + 0.3;
   float c01 = aCov2D.y;
   float c11 = aCov2D.z + 0.3;
   float det  = c00*c11 - c01*c01;
   if (det < 1e-6) {
-    gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // clip away
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
     vUV = vec2(0.0); vInvCov = mat2(1.0);
     vWorldPos = vec3(0.0); vNormal = vec3(0.0,0.0,1.0);
-    vAlbedo = vec3(0.0); vOpacity = 0.0;
+    vAlbedo = vec3(0.0); vBaked = vec3(0.0); vIrradiance = 1.0; vOpacity = 0.0;
     return;
   }
   vInvCov = mat2(c11, -c01, -c01, c00) / det;
 
-  // Bounding radius = 3σ along largest eigen-axis
-  // max eigenvalue of 2x2 SPD: 0.5*(tr + sqrt(tr²-4det))
   float tr  = c00 + c11;
   float rad = sqrt(0.5*(tr + sqrt(max(0.0, tr*tr - 4.0*det))));
-  float r   = 3.0 * rad;   // 3-sigma bounding box
+  float r   = 3.0 * rad;
 
-  // Pixel offset for this corner
   vec2 pixOff = aCorner * r;
-
-  // Convert to NDC offset
   vec2 ndcOff = 2.0 * pixOff / uViewport;
 
-  vUV      = pixOff;
-  vWorldPos = aWorldPos;
-  vNormal  = aNormal;
-  vAlbedo  = aAlbedo;
-  vOpacity = aOpacity;
+  vUV         = pixOff;
+  vWorldPos   = aWorldPos;
+  vNormal     = aNormal;
+  vAlbedo     = aAlbedo;
+  vBaked      = aBaked;
+  vIrradiance = aIrradiance;
+  vOpacity    = aOpacity;
 
   gl_Position = vec4(aCenter + ndcOff, 0.0, 1.0);
 }
 `;
 
-// Neutral: just display SH-derived albedo coloured by Gaussian alpha
+// Left pane: original baked SH appearance (reference)
 const FRAG_NEUTRAL = `#version 300 es
 precision highp float;
 
@@ -430,6 +580,8 @@ in mat2  vInvCov;
 in vec3  vWorldPos;
 in vec3  vNormal;
 in vec3  vAlbedo;
+in vec3  vBaked;
+in float vIrradiance;
 in float vOpacity;
 
 out vec4 fragColor;
@@ -439,11 +591,11 @@ void main() {
   if (maha > 9.0) discard;
   float alpha = vOpacity * exp(-0.5 * maha);
   if (alpha < 0.003) discard;
-  fragColor = vec4(vAlbedo, alpha);
+  fragColor = vec4(vBaked, alpha);
 }
 `;
 
-// Relit: Cook-Torrance microfacet PBR + ambient + point light
+// Right pane: Cook-Torrance on *intrinsic* albedo, not baked SH color
 const FRAG_RELIT = `#version 300 es
 precision highp float;
 
@@ -452,6 +604,8 @@ in mat2  vInvCov;
 in vec3  vWorldPos;
 in vec3  vNormal;
 in vec3  vAlbedo;
+in vec3  vBaked;
+in float vIrradiance;
 in float vOpacity;
 
 uniform vec3  uCamPos;
@@ -459,6 +613,8 @@ uniform vec3  uAmbCol;   uniform float uAmbInt;
 uniform vec3  uDirDir;   uniform vec3  uDirCol;   uniform float uDirInt;
 uniform vec3  uPtPos;    uniform vec3  uPtCol;    uniform float uPtInt;
 uniform float uRough;    uniform float uMetal;    uniform float uSpec;
+uniform float uSep;      // 0 = use baked as albedo (old wrong path), 1 = full separation
+uniform float uKeepAO;   // re-multiply estimated baked irradiance after shading
 uniform int   uGBuf;
 
 out vec4 fragColor;
@@ -499,28 +655,37 @@ void main() {
   vec3 N = normalize(vNormal);
   vec3 V = normalize(uCamPos - vWorldPos);
 
+  // Blend toward intrinsic albedo as separation increases
+  vec3 baseAlbedo = mix(vBaked, vAlbedo, clamp(uSep, 0.0, 1.0));
+
   if (uGBuf == 1) { fragColor = vec4(vAlbedo, alpha); return; }
-  if (uGBuf == 2) { fragColor = vec4(N*0.5+0.5, alpha); return; }
+  if (uGBuf == 2) { fragColor = vec4(vBaked, alpha); return; }
+  if (uGBuf == 3) {
+    float e = vIrradiance;
+    fragColor = vec4(vec3(e), alpha);
+    return;
+  }
+  if (uGBuf == 4) { fragColor = vec4(N*0.5+0.5, alpha); return; }
 
-  // Ambient
-  vec3 color = vAlbedo * uAmbCol * uAmbInt;
+  vec3 color = baseAlbedo * uAmbCol * uAmbInt;
 
-  // Directional
   if (uDirInt > 0.001) {
     vec3 L = normalize(uDirDir);
-    color += cookTorrance(N, V, L, vAlbedo, uRough, uMetal, uSpec) * uDirCol * uDirInt * PI;
+    color += cookTorrance(N, V, L, baseAlbedo, uRough, uMetal, uSpec) * uDirCol * uDirInt * PI;
   }
 
-  // Point
   if (uPtInt > 0.001) {
     vec3  pv  = uPtPos - vWorldPos;
     float pd  = length(pv);
     vec3  L   = pv / max(0.001, pd);
     float att = 1.0 / (0.5 + pd*pd*0.08);
-    color += cookTorrance(N, V, L, vAlbedo, uRough, uMetal, uSpec) * uPtCol * uPtInt * PI * att;
+    color += cookTorrance(N, V, L, baseAlbedo, uRough, uMetal, uSpec) * uPtCol * uPtInt * PI * att;
   }
 
-  if (uGBuf == 3) {
+  // Optional: keep a fraction of baked AO/soft-shadow structure
+  color *= mix(1.0, vIrradiance, clamp(uKeepAO, 0.0, 1.0));
+
+  if (uGBuf == 5) {
     vec3 L = normalize(uDirDir); vec3 H = normalize(L+V);
     float sp = pow(max(0.0,dot(N,H)), 2.0/max(0.01,uRough*uRough));
     fragColor = vec4(uDirCol*sp*uSpec, alpha); return;
@@ -578,7 +743,8 @@ class Renderer {
     this.bufs={
       center:gl.createBuffer(), cov2:gl.createBuffer(),
       wpos:gl.createBuffer(),   norm:gl.createBuffer(),
-      alb:gl.createBuffer(),    op:gl.createBuffer(),
+      alb:gl.createBuffer(),    baked:gl.createBuffer(),
+      irr:gl.createBuffer(),    op:gl.createBuffer(),
     };
     this.vao=gl.createVertexArray();
     this.N=0;
@@ -609,6 +775,8 @@ class Renderer {
     this._attr(prog,'aWorldPos',this.bufs.wpos,  3);
     this._attr(prog,'aNormal', this.bufs.norm,  3);
     this._attr(prog,'aAlbedo', this.bufs.alb,   3);
+    this._attr(prog,'aBaked',  this.bufs.baked, 3);
+    this._attr(prog,'aIrradiance', this.bufs.irr, 1);
     this._attr(prog,'aOpacity',this.bufs.op,    1);
     gl.bindVertexArray(null);
   }
@@ -621,6 +789,8 @@ class Renderer {
     up(this.bufs.wpos,   data.wpos);
     up(this.bufs.norm,   data.norm);
     up(this.bufs.alb,    data.alb);
+    up(this.bufs.baked,  data.baked);
+    up(this.bufs.irr,    data.irr);
     up(this.bufs.op,     data.op);
     this.N=data.n;
   }
@@ -649,6 +819,7 @@ class Renderer {
       gl.uniform3fv(u('uDirDir'),ui.dDir); gl.uniform3fv(u('uDirCol'),ui.dCol); gl.uniform1f(u('uDirInt'),ui.dInt);
       gl.uniform3f(u('uPtPos'),ui.pX,ui.pY,ui.pZ); gl.uniform3fv(u('uPtCol'),ui.pCol); gl.uniform1f(u('uPtInt'),ui.pInt);
       gl.uniform1f(u('uRough'),ui.rough); gl.uniform1f(u('uMetal'),ui.metal); gl.uniform1f(u('uSpec'),ui.spec);
+      gl.uniform1f(u('uSep'),ui.sep); gl.uniform1f(u('uKeepAO'),ui.keepAO);
       gl.uniform1i(u('uGBuf'),ui.gbuf);
     }
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,this.N);
@@ -660,7 +831,7 @@ class Renderer {
 // Projects 3D splats to screen space, depth-sorts them (far→near),
 // and returns packed GPU arrays ready for upload.
 function projectSplats(data, cam, w, h) {
-  const {N, px,py,pz, alR,alG,alB, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz} = data;
+  const {N, px,py,pz, alR,alG,alB, bakedR,bakedG,bakedB, irradiance, op, sc0,sc1,sc2, qw,qx,qy,qz, nx,ny,nz} = data;
 
   // Camera matrices
   const R = camR(cam);
@@ -707,6 +878,8 @@ function projectSplats(data, cam, w, h) {
   const wpos  =new Float32Array(nv*3);
   const norm  =new Float32Array(nv*3);
   const alb   =new Float32Array(nv*3);
+  const baked =new Float32Array(nv*3);
+  const irr   =new Float32Array(nv);
   const opArr =new Float32Array(nv);
 
   for (let si=0; si<nv; si++) {
@@ -729,6 +902,8 @@ function projectSplats(data, cam, w, h) {
     wpos[si*3]=px[i]; wpos[si*3+1]=py[i]; wpos[si*3+2]=pz[i];
     norm[si*3]=nx[i]; norm[si*3+1]=ny[i]; norm[si*3+2]=nz[i];
     alb[si*3]=alR[i]; alb[si*3+1]=alG[i]; alb[si*3+2]=alB[i];
+    baked[si*3]=bakedR[i]; baked[si*3+1]=bakedG[i]; baked[si*3+2]=bakedB[i];
+    irr[si]=irradiance[i];
     opArr[si]=op[i];
 
     // ── 2D Covariance projection ──────────────────────────────
@@ -768,7 +943,7 @@ function projectSplats(data, cam, w, h) {
     cov2[si*4+3]=0;
   }
 
-  return {n:nv, center, cov2, wpos, norm, alb, op:opArr};
+  return {n:nv, center, cov2, wpos, norm, alb, baked, irr, op:opArr};
 }
 
 /* ── MAIN ───────────────────────────────────────────────────── */

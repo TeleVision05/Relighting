@@ -168,6 +168,45 @@ For a balanced relighting application that achieves both high visual quality and
 
 By separating primitive geometry, material properties, and environmental illumination into distinct parameters, this architecture enables custom light placement, material editing, and photorealistic asset integration within reconstructed 3D environments4.
 
+## **Implementation Status: This Repository**
+
+### **What was wrong before**
+
+The interactive viewer (`index.html`) and CPU fallback (`render_splats.py`) claimed to relight with Cook-Torrance PBR, but they treated SH DC (`f_dc_0..2`) as if it were **diffuse albedo**. In a standard 3DGS PLY, those coefficients encode **outgoing radiance under the capture lighting** — i.e. albedo × irradiance (plus residual baked effects), not material reflectance.
+
+Consequences:
+
+1. Sliding light intensity only **scaled already-baked shading** (AO, soft shadows, color temperature). That is intensity modulation, not lighting separation.
+2. New directional/point lights were **multiplied on top of baked illumination**, double-counting lighting and leaving capture-time shadows glued to the surface.
+3. Higher-order SH bands (`f_rest_*`) — where view-dependent specular lives — were ignored for factorization, which is correct for albedo recovery, but the DC path still left diffuse lighting inside the “albedo”.
+4. Normals used a fixed quaternion axis instead of the **shortest principal axis** recommended for surface-like 3D Gaussians.
+
+Empirically on `Buttons.ply`, luminance is almost uncorrelated with surface normals (directional light in DC is weak) but has clear **spatially smooth** low-frequency shading. That means the baked signal we must remove is primarily AO / soft shadowing, not a strong key-light term.
+
+### **What this repo implements now (practical Stage-4 path)**
+
+Full Stages 1–3 from the paper pipeline (multi-view geometry warm-up, visibility baking, joint BRDF + HDR env optimization) require posed images and a training loop. From a **single baked PLY** those stages are unavailable. The code therefore implements a principled single-asset substitute:
+
+| Paper component | This repository |
+| --- | --- |
+| Intrinsic albedo | 3D Retinex: `albedo = appearance / E`, with `E` = blurred log-luminance on a voxel grid |
+| Discard view-dependent lighting | Use SH DC only; ignore `f_rest_*` for material color |
+| Surface normals | Shortest Gaussian scale axis, flipped outward from scene centroid |
+| Novel lighting | Cook-Torrance on **intrinsic** albedo + user lights |
+| Optional residual transport | `Keep AO` remultiplies estimated `E` after shading |
+| Separation strength | `Separate` blends baked→intrinsic (`0` = old incorrect path, `1` = full split) |
+
+Viewer G-buffer modes expose the factorization: Intrinsic Albedo, Baked Appearance, Baked Irradiance/AO, Normals, Relit.
+
+### **Still missing vs. full inverse rendering**
+
+- No joint optimization of per-Gaussian roughness/metallic (globals only).
+- No HDR environment map recovery; lights are analytic (directional + point + ambient).
+- No ray-traced or voxel-cached **dynamic** shadows under the new lights (only optional baked AO retention).
+- No multi-view photometric loss — Retinex can over-smooth albedo texture if voxel resolution is too coarse.
+
+**Path to true paper-grade separation:** retrain or refine the splat with a GS-IR / GaussianShader / IRGS-style inverse-rendering pipeline on the original multi-view images, export albedo + roughness + metallic (+ optional occlusion volumes), then keep this viewer as Stage 4 only.
+
 #### **Works cited**
 
 > 1. GitHub \- Saddy21/gaussian\_resources: Curated list of papers and resources focused on 3D Gaussian Splatting, intended to keep pace with the anticipated surge of research in the coming months., [https://github.com/Saddy21/gaussian\_resources](https://github.com/Saddy21/gaussian_resources)  

@@ -80,6 +80,62 @@ def quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     ], dtype=np.float32)
 
 
+def separate_lighting(
+    positions: np.ndarray,
+    appearance: np.ndarray,
+    opacity: np.ndarray,
+    grid_res: int = 40,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Retinex-style baked-irradiance / intrinsic-albedo split for a single PLY.
+
+    Standard 3DGS SH DC stores outgoing radiance (albedo × lighting), not albedo.
+    Multiplying new lights onto SH DC only changes intensity of baked lighting.
+    Without multi-view images we cannot run full inverse rendering; instead we
+    estimate spatially smooth irradiance E and recover albedo ≈ appearance / E.
+    """
+    lum = np.maximum(
+        0.2126 * appearance[:, 0] + 0.7152 * appearance[:, 1] + 0.0722 * appearance[:, 2],
+        1e-4,
+    )
+    valid = opacity > 0.05
+    if not np.any(valid):
+        return appearance.copy(), np.ones(len(appearance), dtype=np.float32)
+
+    global_log = float(np.mean(np.log(lum[valid])))
+    mins = positions[valid].min(axis=0)
+    maxs = positions[valid].max(axis=0)
+    extent = np.maximum(maxs - mins, 1e-6)
+
+    gi = np.clip(((positions - mins) / extent * (grid_res - 1)).astype(np.int32), 0, grid_res - 1)
+    flat = gi[:, 0] + grid_res * (gi[:, 1] + grid_res * gi[:, 2])
+    cells = grid_res ** 3
+    sum_log = np.zeros(cells, dtype=np.float64)
+    count = np.zeros(cells, dtype=np.float64)
+    np.add.at(sum_log, flat[valid], np.log(lum[valid]))
+    np.add.at(count, flat[valid], 1.0)
+
+    grid = np.full(cells, global_log, dtype=np.float64)
+    nz = count > 0
+    grid[nz] = sum_log[nz] / count[nz]
+
+    def blur_log(src: np.ndarray) -> np.ndarray:
+        vol = src.reshape(grid_res, grid_res, grid_res)
+        pad = np.pad(vol, 2, mode="edge")
+        out = np.zeros_like(vol)
+        for dz in range(5):
+            for dy in range(5):
+                for dx in range(5):
+                    out += pad[dz:dz + grid_res, dy:dy + grid_res, dx:dx + grid_res]
+        return (out / 125.0).ravel()
+
+    grid = blur_log(blur_log(grid))
+    irradiance = np.exp(grid[flat]).astype(np.float64)
+    median = float(np.median(irradiance[valid])) or 1.0
+    irradiance = np.maximum(irradiance / median, 0.05)
+    albedo = np.clip(appearance / irradiance[:, None], 0.0, 1.0).astype(np.float32)
+    return albedo, irradiance.astype(np.float32)
+
+
 def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     data = path.read_bytes()
     marker = b"end_header"
@@ -109,31 +165,46 @@ def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     values = values[:expected].reshape(vertex_count, len(property_names))
 
     props = {name: values[:, i] for i, name in enumerate(property_names)}
-    
-    # Convert Spherical Harmonics DC component (f_dc_0..2) to RGB Albedo
-    sh_c0 = 0.28209479177387814
-    props["albedo_r"] = np.clip(0.5 + props["f_dc_0"] * sh_c0, 0.0, 1.0)
-    props["albedo_g"] = np.clip(0.5 + props["f_dc_1"] * sh_c0, 0.0, 1.0)
-    props["albedo_b"] = np.clip(0.5 + props["f_dc_2"] * sh_c0, 0.0, 1.0)
-    
-    # Sigmoid opacity
-    props["opacity_sig"] = 1.0 / (1.0 + np.exp(-props["opacity"]))
 
-    # Derive unit normals from quaternions rot_0..3 if nx, ny, nz are 0
+    # SH DC → baked linear appearance (lighting still entangled)
+    sh_c0 = 0.28209479177387814
+    baked = np.clip(
+        0.5
+        + np.column_stack([props["f_dc_0"], props["f_dc_1"], props["f_dc_2"]]) * sh_c0,
+        0.0,
+        1.0,
+    ).astype(np.float32)
+    props["baked_r"], props["baked_g"], props["baked_b"] = baked[:, 0], baked[:, 1], baked[:, 2]
+
+    # Sigmoid opacity
+    props["opacity_sig"] = 1.0 / (1.0 + np.exp(-np.clip(props["opacity"], -20.0, 20.0)))
+
+    # Shortest principal axis as surface normal (paper: flatten → normal)
     r0, r1, r2, r3 = props["rot_0"], props["rot_1"], props["rot_2"], props["rot_3"]
     qlen = np.sqrt(r0**2 + r1**2 + r2**2 + r3**2)
     qlen[qlen == 0] = 1.0
     qx, qy, qz, qw = r0 / qlen, r1 / qlen, r2 / qlen, r3 / qlen
-    
-    derived_nx = 2.0 * (qx * qz + qw * qy)
-    derived_ny = 2.0 * (qy * qz - qw * qx)
-    derived_nz = 1.0 - 2.0 * (qx**2 + qy**2)
 
-    has_normals = (np.abs(props["nx"]).max() > 1e-3 or np.abs(props["ny"]).max() > 1e-3 or np.abs(props["nz"]).max() > 1e-3)
-    if not has_normals:
-        props["nx"] = derived_nx
-        props["ny"] = derived_ny
-        props["nz"] = derived_nz
+    c0 = np.column_stack([1 - 2 * (qy**2 + qz**2), 2 * (qx * qy + qw * qz), 2 * (qx * qz - qw * qy)])
+    c1 = np.column_stack([2 * (qx * qy - qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz + qw * qx)])
+    c2 = np.column_stack([2 * (qx * qz + qw * qy), 2 * (qy * qz - qw * qx), 1 - 2 * (qx**2 + qy**2)])
+    scales = np.exp(np.column_stack([props["scale_0"], props["scale_1"], props["scale_2"]]))
+    axis = np.argmin(scales, axis=1)
+    normals = np.where(axis[:, None] == 0, c0, np.where(axis[:, None] == 1, c1, c2)).astype(np.float32)
+    n_norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    n_norms[n_norms == 0] = 1.0
+    normals = normals / n_norms
+
+    positions = np.column_stack([props["x"], props["y"], props["z"]]).astype(np.float32)
+    center = positions[props["opacity_sig"] > 0.05].mean(axis=0) if np.any(props["opacity_sig"] > 0.05) else positions.mean(axis=0)
+    outward = positions - center
+    flip = np.sign((normals * outward).sum(axis=1, keepdims=True) + 1e-8)
+    normals = normals * flip.astype(np.float32)
+    props["nx"], props["ny"], props["nz"] = normals[:, 0], normals[:, 1], normals[:, 2]
+
+    albedo, irradiance = separate_lighting(positions, baked, props["opacity_sig"])
+    props["albedo_r"], props["albedo_g"], props["albedo_b"] = albedo[:, 0], albedo[:, 1], albedo[:, 2]
+    props["irradiance"] = irradiance
 
     return props
 
@@ -149,19 +220,25 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                point_intensity: float = 1.0, point_x: float = 1.2, point_y: float = 1.5, point_z: float = 0.8,
                point_color: Tuple[float, float, float] = (0.22, 0.74, 0.97),
                roughness: float = 0.30, metallic: float = 0.10, specular_gain: float = 1.2,
+               separation: float = 1.0, keep_ao: float = 0.0,
                stride: int = 1) -> bytes:
     guard = TimeoutGuard(time.monotonic())
     props = _load_cached_ply()
 
     positions = np.column_stack([props["x"], props["y"], props["z"]]).astype(np.float32)
     normals = np.column_stack([props["nx"], props["ny"], props["nz"]]).astype(np.float32)
-    
+
     # Normalize normals
     n_norms = np.linalg.norm(normals, axis=1, keepdims=True)
     n_norms[n_norms == 0] = 1.0
     normals = normals / n_norms
 
-    albedo = np.column_stack([props["albedo_r"], props["albedo_g"], props["albedo_b"]]).astype(np.float32)
+    intrinsic = np.column_stack([props["albedo_r"], props["albedo_g"], props["albedo_b"]]).astype(np.float32)
+    baked = np.column_stack([props["baked_r"], props["baked_g"], props["baked_b"]]).astype(np.float32)
+    irradiance = props["irradiance"].astype(np.float32)
+    # sep=1 → intrinsic albedo; sep=0 → old incorrect "SH as albedo" path
+    sep = float(np.clip(separation, 0.0, 1.0))
+    albedo = (baked * (1.0 - sep) + intrinsic * sep).astype(np.float32)
     opacity = props["opacity_sig"].astype(np.float32)
 
     scale0 = props["scale_0"].astype(np.float32)
@@ -278,11 +355,12 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
             weights = weights_list[idx]
             alpha = np.clip(alpha0_val * weights, 0.0, 1.0)
 
-            # Evaluate Microfacet PBR or Neutral base
+            # Evaluate Microfacet PBR on intrinsic albedo, or show baked/neutral
             if mode == "relit":
                 pos_i = positions[i]
                 norm_i = normals[i]
                 alb_i = albedo[i]
+                irr_i = float(irradiance[i])
 
                 # Ambient
                 lit = alb_i * amb_col * ambient
@@ -330,9 +408,15 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                         p_atten = 1.0 / (0.25 + p_dist * p_dist * 0.12)
                         lit += alb_i * point_col * point_intensity * p_ndotl * p_atten
 
+                if keep_ao > 0:
+                    lit = lit * ((1.0 - keep_ao) + keep_ao * irr_i)
+
                 base_rgb = np.clip(lit, 0.0, 1.0)
+            elif mode == "albedo":
+                base_rgb = intrinsic[i]
             else:
-                base_rgb = albedo[i]
+                # Neutral / baked SH appearance
+                base_rgb = baked[i]
 
             # Vectorized alpha compositing
             for j in range(y1 - y0):
@@ -375,6 +459,8 @@ class RenderHandler(SimpleHTTPRequestHandler):
             point_z = float(params.get("pointZ", ["0.8"])[0])
             roughness = float(params.get("roughness", ["0.30"])[0])
             metallic = float(params.get("metallic", ["0.10"])[0])
+            separation = float(params.get("sep", ["1.0"])[0])
+            keep_ao = float(params.get("keepAO", ["0.0"])[0])
 
             png = render_png(
                 mode=mode,
@@ -389,6 +475,8 @@ class RenderHandler(SimpleHTTPRequestHandler):
                 point_z=point_z,
                 roughness=roughness,
                 metallic=metallic,
+                separation=separation,
+                keep_ao=keep_ao,
             )
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
