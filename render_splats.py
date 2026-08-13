@@ -13,13 +13,21 @@ from PIL import Image
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
-PLY_PATH = Path(__file__).with_name("Buttons.ply")
+PLY_PATH = Path(__file__).with_name("father-day.ply")
 _RENDER_TIMEOUT = 300  # seconds — abort renders that take longer than this
 
 # Cache parsed PLY data at module level
 _cached_ply: Dict[str, np.ndarray] | None = None
 _ply_cache_lock = threading.Lock()
 _ply_load_error: Optional[Exception] = None
+
+
+def invalidate_ply_cache() -> None:
+    """Drop the parsed-PLY cache so the next render re-reads PLY_PATH from disk."""
+    global _cached_ply, _ply_load_error
+    with _ply_cache_lock:
+        _cached_ply = None
+        _ply_load_error = None
 
 
 def _load_cached_ply() -> Dict[str, np.ndarray]:
@@ -443,8 +451,45 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
 
 
 class RenderHandler(SimpleHTTPRequestHandler):
+    def _send_json(self, payload) -> None:
+        import json
+
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def end_headers(self) -> None:
+        # Never let the browser cache assets — swapping a .ply on disk must take
+        # effect on the next request, not after a hard refresh.
+        if "Cache-Control" not in self._headers_buffer_names():
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        super().end_headers()
+
+    def _headers_buffer_names(self) -> set:
+        names = set()
+        for raw in getattr(self, "_headers_buffer", []) or []:
+            line = raw.decode("latin-1", "replace")
+            if ":" in line:
+                names.add(line.split(":", 1)[0].strip())
+        return names
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/models":
+            root = Path(self.directory) if getattr(self, "directory", None) else Path.cwd()
+            names = sorted(p.name for p in root.glob("*.ply"))
+            self._send_json(names)
+            return
+        if parsed.path == "/reload":
+            invalidate_ply_cache()
+            self._send_json({"ok": True, "ply": PLY_PATH.name})
+            return
         if parsed.path == "/render":
             params = parse_qs(parsed.query)
             mode = params.get("mode", ["relit"])[0]
