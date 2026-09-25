@@ -429,7 +429,7 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                 # Neutral / baked SH appearance
                 base_rgb = baked[i]
 
-            # Vectorized alpha compositing
+            # Alpha compositing ("over"), scalar per-pixel loop; see ROADMAP.md M2
             for j in range(y1 - y0):
                 for k in range(x1 - x0):
                     a_new = alpha[j * (x1 - x0) + k]
