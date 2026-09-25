@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.*
+
+# Render outputs (python render_splats.py writes these)
+rendered_*.png
+test_out.png
+
+# OS
+.DS_Store

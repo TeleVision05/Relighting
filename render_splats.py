@@ -15,6 +15,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 PLY_PATH = Path(__file__).with_name("father-day.ply")
 _RENDER_TIMEOUT = 300  # seconds — abort renders that take longer than this
+# 3DGS-standard screen-space low-pass (px^2) added to the 2D covariance diagonal;
+# without it a splat is a zero-width line that mostly misses pixel centres.
+_LOWPASS_PX2 = 0.3
 
 # Cache parsed PLY data at module level
 _cached_ply: Dict[str, np.ndarray] | None = None
@@ -313,9 +316,9 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
         scale2d = focal / depth
         s0 = math.exp(clamp(scale0[i], -2.5, 1.6)) * 0.0025 * scale2d
 
-        cov00 = (basis_xv[0] ** 2) * (s0 ** 2) + 1e-6
+        cov00 = (basis_xv[0] ** 2) * (s0 ** 2) + _LOWPASS_PX2
         cov01 = (basis_xv[0] * basis_xv[1]) * (s0 ** 2)
-        cov11 = (basis_xv[1] ** 2) * (s0 ** 2) + 1e-6
+        cov11 = (basis_xv[1] ** 2) * (s0 ** 2) + _LOWPASS_PX2
 
         det = cov00 * cov11 - cov01 * cov01
         if det <= 1e-12:
@@ -506,8 +509,14 @@ class RenderHandler(SimpleHTTPRequestHandler):
             metallic = float(params.get("metallic", ["0.10"])[0])
             separation = float(params.get("sep", ["1.0"])[0])
             keep_ao = float(params.get("keepAO", ["0.0"])[0])
+            width = int(clamp(int(params.get("w", ["1600"])[0]), 16, 2048))
+            height = int(clamp(int(params.get("h", ["1600"])[0]), 16, 2048))
+            stride = int(clamp(int(params.get("stride", ["1"])[0]), 1, 64))
 
             png = render_png(
+                width=width,
+                height=height,
+                stride=stride,
                 mode=mode,
                 ambient=ambient,
                 dir_intensity=dir_intensity,
