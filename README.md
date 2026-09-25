@@ -13,12 +13,21 @@ geometry (see [ROADMAP.md](ROADMAP.md) for the concrete gaps).
 
 ## Layout
 
-- `index.html`: the WebGL2 viewer (main UI). Light, material, `Separate`,
-  `Keep AO` and `N Smooth` controls, G-buffer modes, and a model picker.
+- `index.html`: the WebGL2 viewer (main UI). Split view: left pane is the
+  baked SH appearance (reference), right pane is the relit result. Up to 8
+  lights (directional / point / spot, `MAX_LIGHTS = 8`) with ray-marched
+  shadows through a per-model density volume, four presets (studio, sunset,
+  cyber, day), material sliders, `Separate` / `Keep AO` / `N Smooth`, six
+  G-buffer modes (relit, intrinsic albedo, baked SH DC, baked irradiance/AO,
+  surface normals, specular only) and a model picker. Loads
+  `father-day.ply` by default; `?ply=Buttons.ply` picks another.
 - `serve.py`: stdlib-only static server for the viewer, with a `/models`
   endpoint and no-cache headers. Opens a browser on start.
 - `render_splats.py`: CPU reference renderer in numpy. Writes
-  `rendered_neutral.png` and `rendered_relit.png`, or serves `GET /render`.
+  `rendered_neutral.png` and `rendered_relit.png`, or serves `GET /render`
+  (plus `/models` and `/reload`, which drops the parsed-PLY cache). It is not
+  at feature parity with the viewer: one directional + one point light, no
+  shadows, no normal smoothing, float-only PLY properties.
 - `Relighting 3D Gaussian Splatting.md`: design notes and implementation
   status.
 - `Buttons.ply`, `father-day.ply`: sample scenes, stored in Git LFS.
@@ -31,8 +40,10 @@ git lfs install && git lfs pull                     # sample scenes (~158 MB)
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-The viewer (`serve.py` + `index.html`) needs only Python 3 and a WebGL2
-browser. The venv is only for `render_splats.py` (numpy, pillow) and the tests.
+The viewer (`serve.py` + `index.html`) needs only Python 3 (stdlib) and a
+WebGL2 browser. The venv is only for `render_splats.py` (numpy, pillow) and
+the tests, which need **Python 3.10+** (`render_splats.py` uses a `X | None`
+annotation at module level); verified on 3.12, 3.13 and 3.14.5 on 2026-09-25.
 
 ## Configure
 
@@ -54,7 +65,9 @@ CPU reference renderer:
 ```
 
 `render_splats.py` composites in pure Python per pixel, so use small `w`/`h`
-or a `stride` > 1 for previews. `/render` always renders `father-day.ply`.
+or a `stride` > 1 for previews. `/render` always renders `father-day.ply`
+(hard-coded `PLY_PATH`) from a fixed camera; bad query values are not
+validated (see ROADMAP M3).
 
 ## Test
 

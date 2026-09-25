@@ -10,17 +10,19 @@ What works, and how it was verified:
 | Piece | What it does | Verified by |
 | --- | --- | --- |
 | `serve.py` | stdlib static server for the viewer: `/models` lists `*.ply`, no-cache headers, opens a browser | `tests/test_smoke.py::test_static_viewer_server_lists_models` |
-| `index.html` | WebGL2 viewer: parses the PLY client-side, Retinex albedo/irradiance split, shortest-axis normals with an `N Smooth` blend, Cook-Torrance relighting, G-buffer modes, `Separate` / `Keep AO` sliders, model picker | manual only; no automated test loads the page in a browser |
-| `render_splats.py` | numpy CPU reference: `load_ply`, `separate_lighting`, `render_png` in `relit` / `neutral` / `albedo` modes, `--serve` adds `GET /render` | `tests/test_smoke.py` (PLY parse and derived fields, garbage PLY rejected, uniform-scene separation is identity, all three modes at 256x256, `/models` + `/render` over HTTP) |
-| Sample scenes | `Buttons.ply` (249,973 splats, 41 MB), `father-day.ply` (117 MB) in Git LFS | `git lfs ls-files` shows both present |
+| `index.html` | WebGL2 viewer, split pane (left: baked reference, right: relit). Parses the PLY client-side by header (float or byte-encoded colour/opacity, `nxx` typo tolerated), Retinex albedo/irradiance split, shortest-axis normals blended toward a voxel-smoothed field (`N Smooth`), Cook-Torrance/GGX on intrinsic albedo, up to 8 dir/point/spot lights (`MAX_LIGHTS = 8`), ray-marched shadows through a per-model density volume (`traceShadow`, Shadows panel: reach/quality/bias/strength), six G-buffer modes, four presets, `Separate` / `Keep AO` sliders, model picker | manual only; no automated test loads the page in a browser |
+| `render_splats.py` | numpy CPU reference: `load_ply`, `separate_lighting`, `render_png` in `relit` / `neutral` / `albedo` modes (one directional + one point light, no shadows, no normal smoothing), `--serve` adds `GET /render`, `/models`, `/reload` | `tests/test_smoke.py` (PLY parse and derived fields, garbage PLY rejected, uniform-scene separation is identity, all three modes at 256x256, `/models` + `/render` over HTTP) |
+| Sample scenes | `Buttons.ply` (249,973 splats, 41 MB), `father-day.ply` (471,299 splats, 117 MB) in Git LFS | `git lfs ls-files --size` shows both; `git lfs push --dry-run origin main` is empty (objects are on the remote) |
 
-Test run on 2026-09-25 (`.venv/bin/python -m pytest -q`): `8 passed in 1.81s`.
+Test run on 2026-09-25 (`.venv/bin/python -m pytest -q`, Python 3.14.5):
+`8 passed in 3.47s`.
 The suite renders 1,500 synthetic splats at 256x256; it never touches the LFS
 scenes and never opens a browser.
 
-Repo hygiene: `main` at `486f11a` (README, requirements, pytest.ini, smoke
-tests, rank-1 covariance fix). No linter, no pre-commit hook (only the git-lfs
-hooks in `.git/hooks`), no CI.
+Repo hygiene: README, ROADMAP, requirements, pytest.ini, smoke tests and
+.gitignore landed 2026-09-25 (`git log --oneline -3`). No linter, no
+pre-commit hook (the only non-sample files in `.git/hooks` are git-lfs's
+pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 
 ## Known gaps and bugs
 
@@ -66,6 +68,14 @@ hooks in `.git/hooks`), no CI.
    help separate specular from diffuse).
 9. **No lint or pre-commit hook.** The house rule requires one; nothing in
    this repo enforces formatting or catches unused code such as `basis_yv`.
+10. **CPU renderer is far behind the viewer in features.** The viewer has up
+    to 8 lights of three types, ray-marched shadows, voxel-smoothed normals,
+    six G-buffer modes and byte-encoded PLY support; `render_splats.py` has
+    one directional + one point light, no shadows, raw normals, three modes,
+    and `load_ply` collects only `property float` lines then reshapes the
+    whole body as float32, so any PLY with a `uchar` property is mis-read.
+    "Reference renderer" therefore means reference for geometry and the
+    Retinex split only, not for the lit result.
 
 ## Milestones
 
@@ -121,12 +131,13 @@ hooks in `.git/hooks`), no CI.
       with the synthetic PLY and the real `index.html`, load the page, select
       the model, wait for a frame, assert non-blank canvas pixels and zero
       console errors.
-- [ ] Golden-image comparison per G-buffer mode (albedo, baked, irradiance,
-      normals, relit) on the synthetic sphere.
+- [ ] Golden-image comparison per G-buffer mode (relit, intrinsic albedo,
+      baked SH DC, baked irradiance/AO, surface normals, specular only; the
+      six `<option>`s of `#gbuf` in `index.html`) on the synthetic sphere.
 - [ ] GitHub Actions workflow running `pytest` including the viewer test on
       `ubuntu-latest`, with `git lfs` skipped (the tests do not need the
       scenes).
-- Done when: `tests/test_viewer.py` passes in CI and the run uploads the five
+- Done when: `tests/test_viewer.py` passes in CI and the run uploads the six
   mode screenshots as an artifact.
 
 ### M5. Better separation from a single PLY
@@ -135,9 +146,11 @@ hooks in `.git/hooks`), no CI.
       a "Retinex strength" slider to them in the viewer.
 - [ ] Use the `f_rest_*` SH bands to estimate a view-independent diffuse term
       instead of DC only, and feed the residual into the specular estimate.
-- [ ] Add a dynamic occlusion term for the new lights (voxel-grid opacity
-      accumulation along the light direction) so baked shadows are not the
-      only shadows.
+- [ ] Port the viewer's dynamic shadows to the CPU renderer. The viewer
+      already has them (`index.html` "SHADOW OCCUPANCY VOLUME": density volume
+      baked once per model, `traceShadow` marches it toward each light in the
+      vertex shader); `render_splats.py` has none, so `/render` output can
+      never match the viewer under a new light.
 - Done when: side-by-side renders of `Buttons.ply` under two opposite light
   directions, committed under `docs/`, show no residual capture-time shadow
   direction, with the owner's sign-off recorded in this file.
