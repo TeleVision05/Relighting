@@ -8,8 +8,10 @@
 the GL renderer it came from, because the two differ by an order of magnitude.
 
 Columns:
-  fetch       request start to last byte of the .ply, from the browser's resource timing
+  fetch       load start to last byte of the .ply (the load worker downloads it)
   preprocess  last byte to "Loaded": PLY parse, normals, albedo split, packing, GPU upload
+  blocked     main-thread long tasks (over 50 ms) from navigation to "Loaded", summed; the
+              page cannot respond to input while they run
   ready       page navigation until the first depth sort is drawn (wall clock)
   frame       mean interval between the viewer's own animation frames over about 2 s
   draw        mean time to render both panes once and wait for the GPU, loop paused
@@ -41,11 +43,19 @@ FRAME_INTERVAL_JS = """async () => {
   return (performance.now() - t0) / frames;
 }"""
 
-FETCH_END_JS = """() => {
-  const e = performance.getEntriesByType('resource').filter((r) => r.name.includes('.ply'));
-  const last = e[e.length - 1];
-  return last ? { start: last.startTime, end: last.responseEnd } : null;
-}"""
+# Installed before the page's own scripts: records every long task on the main thread.
+LONG_TASKS_INIT_JS = """
+window.__longTasks = [];
+try {
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) window.__longTasks.push([e.startTime, e.duration]);
+  }).observe({ type: 'longtask', buffered: true });
+} catch (e) {}
+"""
+
+BLOCKED_MS_JS = """(end) => (window.__longTasks || [])
+  .filter(([start]) => start < end)
+  .reduce((sum, [, duration]) => sum + duration, 0)"""
 
 
 def is_real_ply(path: Path) -> bool:
@@ -58,17 +68,19 @@ def is_real_ply(path: Path) -> bool:
 
 
 def measure(viewer: Viewer, url: str) -> dict:
+    viewer.page.add_init_script(LONG_TASKS_INIT_JS)
     ready_s = viewer.open(url, timeout_ms=600_000)
     state = viewer.state()
-    fetch = viewer.page.evaluate(FETCH_END_JS)
     loaded = state["loadTimes"]
+    blocked_ms = viewer.page.evaluate(BLOCKED_MS_JS, loaded["end"])
     frame_ms = viewer.page.evaluate(FRAME_INTERVAL_JS)
     viewer.pause()
     draw_ms = viewer.page.evaluate("(n) => window.__relightTest.renderMs(n)", 3 if state["n"] > 50_000 else 10)
     return {
         "splats": state["n"],
-        "fetch_ms": fetch["end"] - fetch["start"],
-        "preprocess_ms": loaded["end"] - fetch["end"],
+        "fetch_ms": loaded["fetched"] - loaded["start"],
+        "preprocess_ms": loaded["end"] - loaded["fetched"],
+        "blocked_ms": blocked_ms,
         "ready_s": ready_s,
         "frame_ms": frame_ms,
         "draw_ms": draw_ms,
@@ -101,12 +113,12 @@ def run_mode(playwright, mode: str, server: ViewerServer, scenes: dict[str, Path
 
 
 def print_rows(rows: list[dict]) -> None:
-    head = f"{'gl':9} {'scene':16} {'splats':>8} {'MB':>6} {'fetch':>9} {'preprocess':>11} {'ready':>8} {'frame':>9} {'draw':>9}"
+    head = f"{'gl':9} {'scene':16} {'splats':>8} {'MB':>6} {'fetch':>9} {'preprocess':>11} {'blocked':>9} {'ready':>8} {'frame':>9} {'draw':>9}"
     print(head)
     for r in rows:
         print(
             f"{renderer_kind(r['renderer']):9} {r['scene']:16} {r['splats']:>8,} {r['mb']:>6.1f} "
-            f"{r['fetch_ms']:>7.0f}ms {r['preprocess_ms']:>9.0f}ms {r['ready_s']:>7.2f}s "
+            f"{r['fetch_ms']:>7.0f}ms {r['preprocess_ms']:>9.0f}ms {r['blocked_ms']:>7.0f}ms {r['ready_s']:>7.2f}s "
             f"{r['frame_ms']:>7.1f}ms {r['draw_ms']:>7.1f}ms"
         )
         if r["errors"]:

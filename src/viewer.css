@@ -301,6 +301,19 @@ input[type='text']:focus {
   color: var(--green);
   line-height: 1.5;
 }
+.loadbar {
+  height: 4px;
+  margin-top: -6px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+.loadbar > div {
+  height: 100%;
+  width: 0;
+  background: var(--blue);
+  transition: width 0.15s ease-out;
+}
 .hint {
   font-size: 10px;
   color: var(--muted);

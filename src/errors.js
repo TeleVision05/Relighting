@@ -72,8 +72,9 @@ export function serializeError(err) {
   };
 }
 
+// Back to a ViewerError on the receiving side, keeping the original message and stack.
 export function deserializeError(data) {
-  const e = new ViewerError(data.kind, `${data.name}: ${data.message}`);
+  const e = new ViewerError(data.kind, data.message);
   if (data.stack) e.stack = data.stack;
   return e;
 }

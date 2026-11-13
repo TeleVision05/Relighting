@@ -221,7 +221,18 @@
         <div class="card">
           <button class="btn btn-reset" id="resetBtn">↺ Reset Camera &amp; Lighting</button>
         </div>
-        <div id="status">Loading model…</div>
+        <div id="status" role="status" aria-live="polite">Loading model…</div>
+        <div
+          id="loadBar"
+          class="loadbar"
+          role="progressbar"
+          aria-label="Loading the scene"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          hidden
+        >
+          <div></div>
+        </div>
         <div class="hint">Drag to orbit · Scroll to zoom</div>
       </div>
     </div>

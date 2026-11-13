@@ -12,9 +12,10 @@ import {
 } from './camera.js';
 import { bindModelControls, refreshModelList, setLoadingButton } from './model-picker.js';
 import { Renderer } from './renderer.js';
-import { loadScene } from './scene-loader.js';
+import { loadScene, sourceName } from './scene-loader.js';
 import { SplatSorter } from './sort.js';
-import { setStatus, stageLabel, statusEl } from './status.js';
+import { overallProgress } from './stages.js';
+import { setProgress, setStatus, stageLabel, statusEl } from './status.js';
 import { installTestHook, testControl } from './test-hook.js';
 import { applyPreset, getUI, initControls } from './ui.js';
 
@@ -77,7 +78,9 @@ class Viewer {
     Object.assign(this, panes);
     this.data = null;
     this.loading = false;
-    this.loadTimes = null; // { start, end } of the last successful load, performance.now() ms
+    // { start, fetched, end } of the last successful load, performance.now() ms; fetched is
+    // when the bytes were in (the first non-download progress message).
+    this.loadTimes = null;
     this.prevHash = '';
     this.frameCount = 0;
     this.lastFPS = performance.now();
@@ -107,15 +110,26 @@ class Viewer {
     for (const c of [this.camL, this.camR]) Object.assign(c, DEFAULT_VIEW, { dirty: true });
   }
 
+  // Status line and progress bar for one progress message from the loader.
+  _showProgress(p, source, times) {
+    if (p.stage !== 'download' && !times.fetched) times.fetched = performance.now();
+    const name = sourceName(source);
+    setStatus(stageLabel({ ...p, name, local: typeof source !== 'string' }), 'busy');
+    setProgress(overallProgress(p.stage, p.within));
+  }
+
+  // Fetch, parse and preprocess in the load worker, then upload to both panes.
   async loadModel(source) {
     if (this.loading) return;
     this.loading = true;
     setLoadingButton(true);
     const wasEmpty = !this.data;
-    const loadStart = performance.now();
+    const times = { start: performance.now(), fetched: 0 };
+    const onProgress = (p) => this._showProgress(p, source, times);
     try {
-      const next = await loadScene(source);
-      setStatus(stageLabel({ stage: 'upload' }));
+      onProgress({ stage: 'download', within: 0 });
+      const next = await loadScene(source, { request: { bust: true, fresh: true }, onProgress });
+      onProgress({ stage: 'upload', within: 0 });
       await nextTask();
       this.rL.uploadStatic(next.packed);
       this.rR.uploadStatic(next.packed);
@@ -123,7 +137,7 @@ class Viewer {
       this.sorter.setModel(next);
       this.prevHash = ''; // force a re-sort
       this.camL.dirty = this.camR.dirty = true;
-      this.loadTimes = { start: loadStart, end: performance.now() };
+      this.loadTimes = { ...times, end: performance.now() };
       setStatus(`Loaded ${next.N.toLocaleString()} splats`, 'ok');
       if (wasEmpty) this.frame(); // start the render loop on first success
     } catch (e) {
@@ -132,6 +146,7 @@ class Viewer {
     } finally {
       this.loading = false;
       setLoadingButton(false);
+      setProgress(null);
     }
   }
 

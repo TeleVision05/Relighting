@@ -14,11 +14,13 @@ export function setStatus(text, state) {
   }
 }
 
-// Status text for a stage of the load (see STAGES in pipeline.js).
+// Status text for a stage of the load (see STAGES in stages.js).
 export function stageLabel(p) {
   switch (p.stage) {
-    case 'download':
-      return p.local ? `Reading ${p.name}…` : `Fetching ${p.name}…`;
+    case 'download': {
+      const pct = p.within > 0 ? ` ${Math.round(p.within * 100)}%` : '';
+      return (p.local ? `Reading ${p.name}…` : `Downloading ${p.name}…`) + pct;
+    }
     case 'parse':
       return `Parsing ${p.n.toLocaleString()} splats (${p.stride} B/vertex)…`;
     case 'normals':
@@ -30,4 +32,15 @@ export function stageLabel(p) {
     default:
       return 'Uploading to GPU…';
   }
+}
+
+// The bar under the status line: a fraction 0–1 shows it, null hides it.
+export function setProgress(fraction) {
+  const bar = document.getElementById('loadBar');
+  if (!bar) return;
+  bar.hidden = fraction == null;
+  if (fraction == null) return;
+  const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
+  bar.firstElementChild.style.width = pct + '%';
+  bar.setAttribute('aria-valuenow', String(pct));
 }
