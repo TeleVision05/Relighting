@@ -1346,7 +1346,8 @@
 
       // Default model: ?ply=… query param wins, otherwise DEFAULT_PLY.
       const DEFAULT_PLY = './father-day.ply';
-      const INITIAL_PLY = new URLSearchParams(location.search).get('ply') || DEFAULT_PLY;
+      const URL_PARAMS = new URLSearchParams(location.search);
+      const INITIAL_PLY = URL_PARAMS.get('ply') || DEFAULT_PLY;
       // Always offered in the dropdown, even without the /models endpoint.
       const KNOWN_PLYS = ['father-day.ply', 'Buttons.ply'];
 
@@ -2867,6 +2868,68 @@ self.onmessage=(e)=>{
         }
       }
 
+      /* ── URL CAMERA + TEST HOOK ─────────────────────────────────── */
+      // ?cam=yaw,pitch,zoom (radians, radians, distance) fixes the starting view, so a
+      // view can be shared and the browser tests (tests/viewer/) see a known camera.
+      // Anything that does not parse is ignored and the default camera is used.
+      function parseCamParam(text) {
+        const v = (text || '').split(',').map(Number);
+        if (v.length !== 3 || !v.every(Number.isFinite)) return null;
+        const pitch = Math.max(-PI / 2 + 0.01, Math.min(PI / 2 - 0.01, v[1]));
+        return { yaw: v[0], pitch, zoom: Math.max(1, Math.min(50, v[2])) };
+      }
+
+      // ?test=1 only: window.__relightTest lets the browser tests read the panes back.
+      // capture() renders both panes and reads their pixels in the same task, so the
+      // result never depends on when the compositor last presented a frame.
+      const TEST_MODE = URL_PARAMS.get('test') === '1';
+      let renderPaused = false; // set by __relightTest.pause(): captures then do all drawing
+      function bytesToBase64(bytes) {
+        let s = '';
+        for (let i = 0; i < bytes.length; i += 0x8000)
+          s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        return btoa(s);
+      }
+      function readPane(r, w = r.canvas.width, h = r.canvas.height) {
+        const px = new Uint8Array(w * h * 4);
+        r.gl.readPixels(0, 0, w, h, r.gl.RGBA, r.gl.UNSIGNED_BYTE, px);
+        return { w: r.canvas.width, h: r.canvas.height, rgba: bytesToBase64(px) };
+      }
+      function installTestHook(panes, state) {
+        const renderAll = () => {
+          const ui = getUI();
+          for (const [r, cam] of panes) r.render(cam, ui);
+        };
+        const syncAll = () => panes.forEach(([r]) => readPane(r, 1, 1)); // waits for the GPU
+        window.__relightTest = {
+          state,
+          // Stops the render loop from drawing, so software-GL test runs only pay for captures.
+          pause(on = true) {
+            renderPaused = on;
+          },
+          capture() {
+            renderAll();
+            return panes.map(([r]) => readPane(r));
+          },
+          renderer() {
+            const gl = panes[0][0].gl;
+            const ext = gl.getExtension('WEBGL_debug_renderer_info');
+            return gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+          },
+          // Mean milliseconds to render both panes once, waiting for the GPU each time.
+          renderMs(n = 10) {
+            renderAll();
+            syncAll();
+            const t0 = performance.now();
+            for (let i = 0; i < n; i++) {
+              renderAll();
+              syncAll();
+            }
+            return (performance.now() - t0) / n;
+          },
+        };
+      }
+
       /* ── MAIN ───────────────────────────────────────────────────── */
       async function main() {
         // Create and attach canvases
@@ -2888,6 +2951,8 @@ self.onmessage=(e)=>{
 
         const camL = makeCamera(),
           camR = makeCamera();
+        const camParam = parseCamParam(URL_PARAMS.get('cam'));
+        if (camParam) for (const c of [camL, camR]) Object.assign(c, camParam);
         attachOrbit(canvL, camL, camR);
         attachOrbit(canvR, camR, camL);
 
@@ -2943,7 +3008,8 @@ self.onmessage=(e)=>{
 
         // ── Model loading / reloading ──────────────────────────────
         let data = null,
-          loading = false;
+          loading = false,
+          loadTimes = null; // { start, end } of the last successful load, performance.now() ms
         let prevHash = '',
           frameCount = 0,
           lastFPS = performance.now();
@@ -3001,6 +3067,7 @@ self.onmessage=(e)=>{
           loading = true;
           reloadBtn.textContent = '⏳ Loading…';
           const wasEmpty = !data;
+          const loadStart = performance.now();
           try {
             const next = await loadPLY(source);
             statusEl.textContent = 'Uploading to GPU…';
@@ -3012,6 +3079,7 @@ self.onmessage=(e)=>{
             sorter.setModel(next);
             prevHash = ''; // force a re-sort
             camL.dirty = camR.dirty = true;
+            loadTimes = { start: loadStart, end: performance.now() };
             statusEl.textContent = `Loaded ${data.N.toLocaleString()} splats`;
             statusEl.style.color = '#34d399';
             if (wasEmpty) frame(); // start the render loop on first success
@@ -3060,12 +3128,29 @@ self.onmessage=(e)=>{
           fileEl.value = ''; // allow re-picking the same file
         });
 
+        if (TEST_MODE) {
+          installTestHook(
+            [
+              [rL, camL],
+              [rR, camR],
+            ],
+            () => ({
+              loaded: !!data && !loading,
+              n: data ? data.N : 0,
+              sorted: sortedCount,
+              settled: !!data && !loading && !sorter.busy && !sorter.pending && prevHash !== '',
+              status: statusEl.textContent,
+              loadTimes,
+            }),
+          );
+        }
+
         refreshModelList(INITIAL_PLY);
         await loadModel(INITIAL_PLY);
 
         function frame() {
           requestAnimationFrame(frame);
-          if (!data) return; // nothing loaded yet / load failed
+          if (!data || renderPaused) return; // nothing loaded yet / load failed / test paused
           const ui = getUI();
           const w = canvL.width,
             h = canvL.height;
