@@ -98,11 +98,42 @@ once; extra requests get a `503` asking to try again.
 .venv/bin/python -m pytest -q
 ```
 
-The tests build a tiny synthetic splat PLY, so they do not need the LFS
-models or a browser. They cover PLY parsing and the derived normals/albedo,
-the lighting separation, all three CPU render modes, both HTTP servers (the
-file allow-list, loopback binding, `/render` validation and limits).
-The WebGL viewer itself has no automated test yet.
+The tests build small synthetic splat PLYs, so they do not need the LFS
+models. They cover PLY parsing and the derived normals/albedo, the lighting
+separation, all three CPU render modes, both HTTP servers (the file allow-list,
+loopback binding, `/render` validation and limits), and the WebGL viewer.
+
+### Viewer (browser) tests
+
+`tests/viewer/` drives the real `index.html` in headless Chromium (no window
+opens). It writes three scenes with known geometry (`tests/viewer/splat_scenes.py`:
+a tilted plane, a sphere, a ground plane under a floating ball) in the same PLY
+layout as `Buttons.ply`, then checks, with numeric tolerances rather than golden
+images: no console or shader errors, nothing blank, every G-buffer mode distinct,
+the scene the right way up, rendered normals within a few degrees of the known
+ones (this catches a wrong quaternion order or a lost Y/Z flip), a new light
+changing only the relit pane, the bright side following the light, and a shadow
+behind an occluder.
+
+```bash
+.venv/bin/python -m playwright install chromium     # once
+.venv/bin/python -m pytest -q -m browser            # software GL (SwiftShader)
+RELIGHTING_GL=gpu .venv/bin/python -m pytest -q -m browser   # on the GPU, much faster
+.venv/bin/python -m pytest -q -m "not browser"      # everything except the browser tests
+```
+
+When a browser test fails, the images it captured are saved in
+`test-results/viewer/`. The tests talk to the viewer through two URL
+parameters: `?cam=yaw,pitch,zoom` sets the starting camera (also handy for
+sharing a view), and `?test=1` exposes `window.__relightTest` (read back the
+panes, pause the render loop). Neither changes anything when absent.
+
+Timing probe (prints, never fails): load, preprocess and frame times on the
+synthetic scenes and on any real scene you pass.
+
+```bash
+.venv/bin/python tests/viewer/timing_probe.py --ply Buttons.ply   # --gl auto|gpu|software
+```
 
 ## Lint and format
 

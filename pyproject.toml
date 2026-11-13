@@ -17,3 +17,6 @@ quote-style = "double"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "browser: drives the WebGL viewer in headless Chromium (python -m playwright install chromium); deselect with -m 'not browser'",
+]
