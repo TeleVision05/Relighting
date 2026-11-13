@@ -12,10 +12,11 @@ import {
 } from './camera.js';
 import { bindModelControls, refreshModelList, setLoadingButton } from './model-picker.js';
 import { Renderer } from './renderer.js';
+import { isLocalHost } from './fetch-scene.js';
 import { loadScene, sourceName } from './scene-loader.js';
 import { SplatSorter } from './sort.js';
 import { overallProgress } from './stages.js';
-import { setProgress, setStatus, stageLabel, statusEl } from './status.js';
+import { setNotice, setProgress, setStatus, showError, stageLabel, statusEl } from './status.js';
 import { installTestHook, testControl } from './test-hook.js';
 import { applyPreset, getUI, initControls } from './ui.js';
 
@@ -24,6 +25,8 @@ const DEFAULT_PLY = './father-day.ply';
 const URL_PARAMS = new URLSearchParams(location.search);
 const INITIAL_PLY = URL_PARAMS.get('ply') || DEFAULT_PLY;
 const TEST_MODE = URL_PARAMS.get('test') === '1';
+// Cache-busting query strings only on a local dev server (see isLocalHost).
+const LOCAL_DEV = isLocalHost(location.hostname);
 const nextTask = () => new Promise((r) => setTimeout(r, 0));
 
 function createPanes() {
@@ -118,8 +121,9 @@ class Viewer {
     setProgress(overallProgress(p.stage, p.within));
   }
 
-  // Fetch, parse and preprocess in the load worker, then upload to both panes.
-  async loadModel(source) {
+  // Fetch, parse and preprocess in the load worker, then upload to both panes. `reload`
+  // (the Reload button) asks the browser for a fresh copy instead of a cached one.
+  async loadModel(source, { reload = false } = {}) {
     if (this.loading) return;
     this.loading = true;
     setLoadingButton(true);
@@ -128,7 +132,8 @@ class Viewer {
     const onProgress = (p) => this._showProgress(p, source, times);
     try {
       onProgress({ stage: 'download', within: 0 });
-      const next = await loadScene(source, { request: { bust: true, fresh: true }, onProgress });
+      const request = { bust: LOCAL_DEV, fresh: LOCAL_DEV || reload };
+      const next = await loadScene(source, { request, onProgress });
       onProgress({ stage: 'upload', within: 0 });
       await nextTask();
       this.rL.uploadStatic(next.packed);
@@ -139,10 +144,12 @@ class Viewer {
       this.camL.dirty = this.camR.dirty = true;
       this.loadTimes = { ...times, end: performance.now() };
       setStatus(`Loaded ${next.N.toLocaleString()} splats`, 'ok');
+      setNotice(null);
       if (wasEmpty) this.frame(); // start the render loop on first success
     } catch (e) {
-      setStatus(`Load error: ${e.message}`, 'error');
-      console.error(e);
+      // With a scene already on screen, the status line is enough; without one, the panes
+      // would be empty, so the message goes over them too.
+      showError(e, { notice: !this.data });
     } finally {
       this.loading = false;
       setLoadingButton(false);
@@ -212,8 +219,7 @@ async function main() {
   try {
     panes = createPanes();
   } catch (e) {
-    setStatus(`WebGL2 Error: ${e.message}`, 'error');
-    console.error(e);
+    showError(e, { fallback: 'webgl2', notice: true });
     return;
   }
   const viewer = new Viewer(panes);
@@ -221,7 +227,7 @@ async function main() {
   window.addEventListener('resize', () => viewer.resize());
   viewer.resize();
   document.getElementById('resetBtn').addEventListener('click', () => viewer.resetView());
-  bindModelControls(INITIAL_PLY, (source) => viewer.loadModel(source));
+  bindModelControls(INITIAL_PLY, (source, opts) => viewer.loadModel(source, opts));
   if (TEST_MODE) {
     const p = viewer;
     installTestHook(
@@ -236,7 +242,4 @@ async function main() {
   await viewer.loadModel(INITIAL_PLY);
 }
 
-main().catch((e) => {
-  setStatus(`Fatal: ${e.message}`, 'error');
-  console.error(e);
-});
+main().catch((e) => showError(e, { fallback: 'startup', notice: true }));

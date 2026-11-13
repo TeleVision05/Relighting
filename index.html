@@ -15,6 +15,12 @@
   <body>
     <div id="app">
       <div class="vbox" id="vbox">
+        <div id="notice" class="notice" role="alert" hidden>
+          <div class="notice-card">
+            <h2>The scene cannot be shown</h2>
+            <p></p>
+          </div>
+        </div>
         <div class="vpane" id="pL">
           <div class="badge">
             <span class="dot" style="background: #a7f3d0"></span>Baked — SH appearance (lit)
@@ -236,6 +242,25 @@
         <div class="hint">Drag to orbit · Scroll to zoom</div>
       </div>
     </div>
-    <script type="module" src="./src/app.js"></script>
+    <script type="module" src="./src/app.js" onerror="viewerFailedToStart()"></script>
+    <script>
+      // Runs only if the viewer's modules cannot be downloaded, or (tooOld) the browser cannot
+      // run them at all. Plain ES5 on purpose. Everything else reports through src/status.js.
+      window.viewerFailedToStart = function (tooOld) {
+        var msg = tooOld
+          ? 'This browser is too old to run the viewer. Try a recent version of Chrome, Edge, Firefox or Safari.'
+          : 'The viewer could not start. Reload the page to try again.';
+        var status = document.getElementById('status');
+        status.textContent = msg;
+        status.style.color = '#f87171';
+        status.setAttribute('data-state', 'error');
+        var notice = document.getElementById('notice');
+        notice.querySelector('p').textContent = msg;
+        notice.hidden = false;
+      };
+    </script>
+    <script nomodule>
+      window.viewerFailedToStart(true);
+    </script>
   </body>
 </html>

@@ -3,6 +3,20 @@
 
 import { ViewerError } from './errors.js';
 
+// True for a page served from this computer (serve.py, the render server, the tests). Only
+// there can a scene change on disk under the same name, so only there do loads add a
+// cache-busting query string; a hosted copy (GitHub Pages) lets the browser cache scenes.
+export function isLocalHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  return (
+    h === 'localhost' ||
+    h.endsWith('.localhost') ||
+    h === '[::1]' ||
+    h === '::1' ||
+    /^127(\.\d{1,3}){3}$/.test(h)
+  );
+}
+
 // The request for a scene URL. `bust` appends a unique query string (only worth it on a
 // local dev server, where the file changes under the same name); `fresh` bypasses the
 // HTTP cache for this request (Reload).

@@ -28,9 +28,44 @@ body {
   height: 100vh;
 }
 .vbox {
+  position: relative;
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+.notice {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+}
+.notice[hidden] {
+  display: none;
+}
+.notice-card {
+  max-width: 420px;
+  padding: 18px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(13, 20, 36, 0.92);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  user-select: text;
+}
+.notice-card h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fca5a5;
+  margin-bottom: 6px;
+}
+.notice-card p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
 }
 .vpane {
   position: relative;

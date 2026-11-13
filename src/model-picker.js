@@ -1,5 +1,7 @@
 // The Model card: dropdown, path box, Reload and "Open file…".
 
+import { isLocalHost } from './fetch-scene.js';
+
 // Always offered in the dropdown, even without the /models endpoint.
 export const KNOWN_PLYS = ['father-day.ply', 'Buttons.ply'];
 
@@ -13,7 +15,8 @@ export async function refreshModelList(selected) {
     pickEl = $('plyPick');
   let files = KNOWN_PLYS.slice();
   try {
-    const r = await fetch('./models?_=' + Date.now(), { cache: 'no-store' });
+    const bust = isLocalHost(location.hostname) ? '?_=' + Date.now() : '';
+    const r = await fetch('./models' + bust, { cache: 'no-store' });
     if (r.ok) {
       const served = await r.json();
       for (const f of served) if (!files.includes(f)) files.push(f);
@@ -35,7 +38,8 @@ export async function refreshModelList(selected) {
   if (files.includes(want)) pickEl.value = './' + want;
 }
 
-// `load(source)` loads a URL string or a File. Reload repeats the last choice.
+// `load(source, { reload })` loads a URL string or a File. Reload repeats the last choice
+// and asks for a fresh copy (reload: true).
 export function bindModelControls(initial, load) {
   const pathEl = $('plyPath'),
     pickEl = $('plyPick'),
@@ -44,11 +48,11 @@ export function bindModelControls(initial, load) {
   pathEl.value = initial;
   let localFile = null; // set when a file was opened from disk
   reloadBtn.addEventListener('click', () => {
-    if (localFile) return void load(localFile);
+    if (localFile) return void load(localFile, { reload: true });
     const p = pathEl.value.trim();
     if (p) {
       refreshModelList(p);
-      load(p);
+      load(p, { reload: true });
     }
   });
   pickEl.addEventListener('change', () => {

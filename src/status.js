@@ -1,4 +1,7 @@
-// The status line at the bottom of the sidebar.
+// The status line at the bottom of the sidebar, the load progress bar, and the notice shown
+// over the panes when there is nothing to look at.
+
+import { MESSAGES, errorKind } from './errors.js';
 
 const COLORS = { busy: '#94a3b8', ok: '#34d399', error: '#f87171' };
 
@@ -43,4 +46,22 @@ export function setProgress(fraction) {
   const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
   bar.firstElementChild.style.width = pct + '%';
   bar.setAttribute('aria-valuenow', String(pct));
+}
+
+// The card over the panes: text shows it, null hides it.
+export function setNotice(text) {
+  const el = document.getElementById('notice');
+  if (!el) return;
+  el.hidden = text == null;
+  el.querySelector('p').textContent = text || '';
+}
+
+// Tell the person what went wrong in plain language; the raw error goes to the console only.
+// `notice` also puts the message over the panes (when there is no scene to show).
+export function showError(err, { fallback = 'unknown', notice = false } = {}) {
+  const kind = errorKind(err, fallback);
+  console.error(`[relighting] ${kind}:`, err);
+  setStatus(MESSAGES[kind], 'error');
+  setNotice(notice ? MESSAGES[kind] : null);
+  return kind;
 }

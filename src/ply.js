@@ -139,7 +139,9 @@ export function readLayout(buf) {
   const hdr = parsePLYHeader(new TextDecoder().decode(bytes.slice(0, hdrEnd)));
   const start = dataStart(bytes, hdrEnd);
   const available = Math.floor((buf.byteLength - start) / hdr.stride);
-  return { hdr, start, realN: Math.min(hdr.N, available) };
+  const realN = Math.min(hdr.N, available);
+  if (!(realN > 0)) throw unsupported(`No complete vertex records (stride ${hdr.stride} B)`);
+  return { hdr, start, realN };
 }
 
 function makeReaders(hdr) {

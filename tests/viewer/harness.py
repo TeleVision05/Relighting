@@ -32,6 +32,11 @@ FIXTURE_PREFIX = "/__fixtures__/"
 # makes the left pane 1 px wider than the right, so compare across panes with crop_common().
 VIEWPORT = {"width": 1300, "height": 720}
 
+# A hostname that is not "localhost" but still reaches the test server, so tests can open the
+# viewer the way a hosted copy (GitHub Pages) is opened: no cache-busting query strings.
+HOSTED_NAME = "relighting.test"
+HOST_ARGS = [f"--host-resolver-rules=MAP {HOSTED_NAME} 127.0.0.1"]
+
 # SwiftShader is Chromium's CPU implementation of GL; it gives the same answer on any machine.
 GL_ARGS = {
     "software": ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -48,15 +53,17 @@ def gl_mode() -> str:
 
 
 def launch_browser(playwright, mode: str):
-    return playwright.chromium.launch(headless=True, args=GL_ARGS[mode])
+    return playwright.chromium.launch(headless=True, args=GL_ARGS[mode] + HOST_ARGS)
 
 
 class _FixtureHandler(SafeStaticHandler):
     fixtures: dict[str, Path] = {}
+    requests: list[str] = []  # every fixture request line, query string included
 
     def send_head(self):
         path = urlsplit(self.path).path
         if path.startswith(FIXTURE_PREFIX):
+            self.requests.append(self.path)
             target = self.fixtures.get(path[len(FIXTURE_PREFIX) :])
             if target is None:
                 self.send_message(404, "No such test scene.")
@@ -70,7 +77,8 @@ class ViewerServer:
     """The repository root on a free 127.0.0.1 port, plus named fixture files."""
 
     def __init__(self, fixtures: dict[str, Path]):
-        handler = type("Handler", (_FixtureHandler,), {"fixtures": dict(fixtures)})
+        self.requests: list[str] = []
+        handler = type("Handler", (_FixtureHandler,), {"fixtures": dict(fixtures), "requests": self.requests})
 
         def make(*args, **kwargs):
             return handler(*args, directory=str(ROOT), **kwargs)
@@ -80,8 +88,10 @@ class ViewerServer:
         host, port = self.httpd.server_address[:2]
         self.base_url = f"http://{host}:{port}"
 
-    def scene_url(self, name: str, cam: Camera) -> str:
-        return f"{self.base_url}/index.html?test=1&cam={cam.param}&ply={FIXTURE_PREFIX}{name}"
+    def scene_url(self, name: str, cam: Camera, hosted: bool = False) -> str:
+        """The viewer on one fixture scene. ``hosted`` opens it under HOSTED_NAME instead of 127.0.0.1."""
+        base = self.base_url.replace("127.0.0.1", HOSTED_NAME) if hosted else self.base_url
+        return f"{base}/index.html?test=1&cam={cam.param}&ply={FIXTURE_PREFIX}{name}"
 
     def close(self) -> None:
         self.httpd.shutdown()
@@ -91,7 +101,7 @@ class ViewerServer:
 _SETTLED_OR_FAILED_JS = """() => {
   if (window.__relightTest && window.__relightTest.state().settled) return true;
   const status = document.querySelector('#status');
-  return !!status && /error|fatal/i.test(status.textContent);
+  return !!status && status.dataset.state === 'error';
 }"""
 
 
@@ -108,7 +118,7 @@ class Viewer:
 
     def open(self, url: str, timeout_ms: int = 60_000) -> float:
         """Load the page and wait until the scene is drawn with a finished sort, or the viewer
-        reports an error in its status line (a shader that will not compile, a bad file).
+        reports an error (status data-state="error": a shader that will not compile, a bad file).
         Returns seconds."""
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
