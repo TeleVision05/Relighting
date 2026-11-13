@@ -51,6 +51,21 @@ RENDER_FAILED_MESSAGE = (
 )
 
 
+def _render(kwargs: dict, query: str) -> tuple[bytes | None, int, str]:
+    """Run one render. Returns (png, 200, "") or (None, status, plain-language message)."""
+    try:
+        return render_splats.render_png(**kwargs), 200, ""
+    except render_splats.RenderTimeoutError:
+        log.warning("render timed out for %s", query)
+        return None, 504, TIMEOUT_MESSAGE
+    except (OSError, RuntimeError, ValueError):
+        log.exception("could not load or render the scene")
+        return None, 500, SCENE_MESSAGE
+    except Exception:
+        log.exception("render failed")
+        return None, 500, RENDER_FAILED_MESSAGE
+
+
 class RenderHandler(SafeStaticHandler):
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
@@ -72,21 +87,12 @@ class RenderHandler(SafeStaticHandler):
             self.send_message(503, BUSY_MESSAGE, {"Retry-After": "30"})
             return
         try:
-            png = render_splats.render_png(**kwargs)
-        except render_splats.RenderTimeoutError:
-            log.warning("render timed out for %s", query)
-            self.send_message(504, TIMEOUT_MESSAGE)
-            return
-        except (OSError, RuntimeError, ValueError):
-            log.exception("could not load or render the scene")
-            self.send_message(500, SCENE_MESSAGE)
-            return
-        except Exception:
-            log.exception("render failed")
-            self.send_message(500, RENDER_FAILED_MESSAGE)
-            return
+            png, status, message = _render(kwargs, query)
         finally:
-            _render_slots.release()
+            _render_slots.release()  # before replying, so a slow client never holds a slot
+        if png is None:
+            self.send_message(status, message)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(png)))
