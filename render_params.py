@@ -17,7 +17,7 @@ _MAX_ECHO = 30  # characters of a bad value repeated back to the person
 _INT_RE = re.compile(r"[+-]?[0-9]{1,9}", re.ASCII)
 _FLOAT_RE = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]{1,3})?", re.ASCII)
 
-MODES = ("relit", "neutral", "albedo")
+MODES = ("relit", "neutral", "albedo", "normals")
 
 
 class RenderParamError(ValueError):
@@ -54,6 +54,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("metallic", "metallic", "Metallic", "float", 0.10, 0, 1),
     Setting("sep", "separation", "Lighting separation", "float", 1.0, 0, 1),
     Setting("keepAO", "keep_ao", "Keep AO", "float", 0.0, 0, 1),
+    # The viewer's orbit camera (?cam=yaw,pitch,zoom); defaults are its DEFAULT_VIEW.
+    Setting("yaw", "yaw", "Camera yaw in radians", "float", 0.4, -10, 10),
+    Setting("pitch", "pitch", "Camera pitch in radians", "float", 0.25, -1.56, 1.56),
+    Setting("zoom", "zoom", "Camera distance", "float", 10.0, 1, 50),
 )
 _BY_QUERY = {s.query: s for s in SETTINGS}
 
