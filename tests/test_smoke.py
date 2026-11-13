@@ -1,4 +1,5 @@
 """Headless smoke tests: render a tiny synthetic splat set, no big .ply files needed."""
+
 import json
 import threading
 import urllib.request
@@ -14,8 +15,22 @@ from PIL import Image
 import render_splats
 import serve
 
-PROPS = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
-         "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
+PROPS = [
+    "x",
+    "y",
+    "z",
+    "f_dc_0",
+    "f_dc_1",
+    "f_dc_2",
+    "opacity",
+    "scale_0",
+    "scale_1",
+    "scale_2",
+    "rot_0",
+    "rot_1",
+    "rot_2",
+    "rot_3",
+]
 
 
 def write_synthetic_ply(path: Path, n: int = 1500, seed: int = 0) -> None:
@@ -26,9 +41,9 @@ def write_synthetic_ply(path: Path, n: int = 1500, seed: int = 0) -> None:
     data = np.zeros((n, len(PROPS)), dtype="<f4")
     data[:, 0:3] = pts
     data[:, 3:6] = rng.uniform(-1.0, 1.0, size=(n, 3))  # SH DC colour
-    data[:, 6] = 4.0                                    # logit opacity -> ~0.98
-    data[:, 7:10] = [1.6, 1.6, -3.0]                    # flat disc, normal = axis 2
-    data[:, 13] = 1.0                                   # identity quaternion (x,y,z,w)
+    data[:, 6] = 4.0  # logit opacity -> ~0.98
+    data[:, 7:10] = [1.6, 1.6, -3.0]  # flat disc, normal = axis 2
+    data[:, 13] = 1.0  # identity quaternion (x,y,z,w)
     header = "ply\nformat binary_little_endian 1.0\n"
     header += f"element vertex {n}\n"
     header += "".join(f"property float {p}\n" for p in PROPS)

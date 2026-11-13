@@ -11,6 +11,7 @@ Why not `python -m http.server`:
 This fixes all three. render_splats.py --serve does the same and adds the
 server-side /render endpoint, but that one needs numpy.
 """
+
 import json
 import sys
 import threading
@@ -28,8 +29,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         # A cached index.html is indistinguishable from "my changes did nothing".
-        if not any(h.lower().startswith(b"cache-control")
-                   for h in (self._headers_buffer or [])):
+        if not any(h.lower().startswith(b"cache-control") for h in (self._headers_buffer or [])):
             self.send_header("Cache-Control", "no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")

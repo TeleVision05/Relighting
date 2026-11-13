@@ -50,19 +50,19 @@ def _load_cached_ply() -> Dict[str, np.ndarray]:
 
 class RenderTimeoutError(Exception):
     """Raised when a render operation exceeds the timeout limit."""
+
     pass
 
 
 class TimeoutGuard:
     """Context manager that raises RenderTimeoutError if timeout is exceeded."""
+
     def __init__(self, start_time: float):
         self.start_time = start_time
 
     def check(self):
         if time.monotonic() - self.start_time > _RENDER_TIMEOUT:
-            raise RenderTimeoutError(
-                f"Render timed out after {_RENDER_TIMEOUT}s — reduce splat count or resolution"
-            )
+            raise RenderTimeoutError(f"Render timed out after {_RENDER_TIMEOUT}s — reduce splat count or resolution")
 
     def __enter__(self):
         return self
@@ -84,11 +84,14 @@ def quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     wx = qw * x2
     wy = qw * y2
     wz = qw * z2
-    return np.array([
-        [1 - (yy + zz), xy - wz, xz + wy],
-        [xy + wz, 1 - (xx + zz), yz - wx],
-        [xz - wy, yz + wx, 1 - (xx + yy)],
-    ], dtype=np.float32)
+    return np.array(
+        [
+            [1 - (yy + zz), xy - wz, xz + wy],
+            [xy + wz, 1 - (xx + zz), yz - wx],
+            [xz - wy, yz + wx, 1 - (xx + yy)],
+        ],
+        dtype=np.float32,
+    )
 
 
 def separate_lighting(
@@ -119,7 +122,7 @@ def separate_lighting(
 
     gi = np.clip(((positions - mins) / extent * (grid_res - 1)).astype(np.int32), 0, grid_res - 1)
     flat = gi[:, 0] + grid_res * (gi[:, 1] + grid_res * gi[:, 2])
-    cells = grid_res ** 3
+    cells = grid_res**3
     sum_log = np.zeros(cells, dtype=np.float64)
     count = np.zeros(cells, dtype=np.float64)
     np.add.at(sum_log, flat[valid], np.log(lum[valid]))
@@ -136,7 +139,7 @@ def separate_lighting(
         for dz in range(5):
             for dy in range(5):
                 for dx in range(5):
-                    out += pad[dz:dz + grid_res, dy:dy + grid_res, dx:dx + grid_res]
+                    out += pad[dz : dz + grid_res, dy : dy + grid_res, dx : dx + grid_res]
         return (out / 125.0).ravel()
 
     grid = blur_log(blur_log(grid))
@@ -154,7 +157,7 @@ def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     if idx < 0:
         raise RuntimeError("Unable to find end_header in PLY")
     header_text = data[:idx].decode("latin1", "ignore")
-    body = data[idx + len(marker):]
+    body = data[idx + len(marker) :]
     while body.startswith((b"\r", b"\n", b" ")):
         body = body[1:]
 
@@ -180,8 +183,7 @@ def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     # SH DC → baked linear appearance (lighting still entangled)
     sh_c0 = 0.28209479177387814
     baked = np.clip(
-        0.5
-        + np.column_stack([props["f_dc_0"], props["f_dc_1"], props["f_dc_2"]]) * sh_c0,
+        0.5 + np.column_stack([props["f_dc_0"], props["f_dc_1"], props["f_dc_2"]]) * sh_c0,
         0.0,
         1.0,
     ).astype(np.float32)
@@ -207,7 +209,11 @@ def load_ply(path: Path = PLY_PATH) -> Dict[str, np.ndarray]:
     normals = normals / n_norms
 
     positions = np.column_stack([props["x"], props["y"], props["z"]]).astype(np.float32)
-    center = positions[props["opacity_sig"] > 0.05].mean(axis=0) if np.any(props["opacity_sig"] > 0.05) else positions.mean(axis=0)
+    center = (
+        positions[props["opacity_sig"] > 0.05].mean(axis=0)
+        if np.any(props["opacity_sig"] > 0.05)
+        else positions.mean(axis=0)
+    )
     outward = positions - center
     flip = np.sign((normals * outward).sum(axis=1, keepdims=True) + 1e-8)
     normals = normals * flip.astype(np.float32)
@@ -224,15 +230,29 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambient: float = 0.20,
-               ambient_color: Tuple[float, float, float] = (0.8, 0.84, 0.88),
-               dir_intensity: float = 1.5, dir_x: float = 0.5, dir_y: float = 0.7, dir_z: float = 0.5,
-               dir_color: Tuple[float, float, float] = (1.0, 1.0, 1.0),
-               point_intensity: float = 1.0, point_x: float = 1.2, point_y: float = 1.5, point_z: float = 0.8,
-               point_color: Tuple[float, float, float] = (0.22, 0.74, 0.97),
-               roughness: float = 0.30, metallic: float = 0.10, specular_gain: float = 1.2,
-               separation: float = 1.0, keep_ao: float = 0.0,
-               stride: int = 1) -> bytes:
+def render_png(
+    width: int = 1600,
+    height: int = 1600,
+    mode: str = "relit",
+    ambient: float = 0.20,
+    ambient_color: Tuple[float, float, float] = (0.8, 0.84, 0.88),
+    dir_intensity: float = 1.5,
+    dir_x: float = 0.5,
+    dir_y: float = 0.7,
+    dir_z: float = 0.5,
+    dir_color: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    point_intensity: float = 1.0,
+    point_x: float = 1.2,
+    point_y: float = 1.5,
+    point_z: float = 0.8,
+    point_color: Tuple[float, float, float] = (0.22, 0.74, 0.97),
+    roughness: float = 0.30,
+    metallic: float = 0.10,
+    specular_gain: float = 1.2,
+    separation: float = 1.0,
+    keep_ao: float = 0.0,
+    stride: int = 1,
+) -> bytes:
     guard = TimeoutGuard(time.monotonic())
     props = _load_cached_ply()
 
@@ -263,11 +283,14 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
     pitch = -0.15
     cy, sy = math.cos(yaw), math.sin(yaw)
     cx, sx = math.cos(pitch), math.sin(pitch)
-    view_rot = np.array([
-        [cy, 0.0, sy],
-        [sy * sx, cx, -cy * sx],
-        [-sy * cx, sx, cy * cx],
-    ], dtype=np.float32)
+    view_rot = np.array(
+        [
+            [cy, 0.0, sy],
+            [sy * sx, cx, -cy * sx],
+            [-sy * cx, sx, cy * cx],
+        ],
+        dtype=np.float32,
+    )
 
     focal = min(width, height) * 0.75
     n_total = len(positions)
@@ -316,9 +339,9 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
         scale2d = focal / depth
         s0 = math.exp(clamp(scale0[i], -2.5, 1.6)) * 0.0025 * scale2d
 
-        cov00 = (basis_xv[0] ** 2) * (s0 ** 2) + _LOWPASS_PX2
-        cov01 = (basis_xv[0] * basis_xv[1]) * (s0 ** 2)
-        cov11 = (basis_xv[1] ** 2) * (s0 ** 2) + _LOWPASS_PX2
+        cov00 = (basis_xv[0] ** 2) * (s0**2) + _LOWPASS_PX2
+        cov01 = (basis_xv[0] * basis_xv[1]) * (s0**2)
+        cov11 = (basis_xv[1] ** 2) * (s0**2) + _LOWPASS_PX2
 
         det = cov00 * cov11 - cov01 * cov01
         if det <= 1e-12:
@@ -338,7 +361,7 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
         dx = xx.astype(np.float32) - sx2
         dy = yy.astype(np.float32) - sy2
         delta = np.stack([dx, dy], axis=-1).reshape(-1, 2)
-        exponent = -0.5 * np.einsum('...i,ij,...j->...', delta, inv_cov, delta)
+        exponent = -0.5 * np.einsum("...i,ij,...j->...", delta, inv_cov, delta)
         weights = np.exp(np.clip(exponent, -20.0, 0.0))
 
         valid_indices.append(i)
@@ -389,7 +412,7 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                     vdoth = max(0.0, float(np.dot(v_dir, h_dir)))
 
                     a2 = max(0.001, roughness * roughness) ** 2
-                    d_denom = (ndoth * ndoth * (a2 - 1.0) + 1.0)
+                    d_denom = ndoth * ndoth * (a2 - 1.0) + 1.0
                     d_ggx = a2 / (math.pi * d_denom * d_denom)
 
                     f0 = (1.0 - metallic) * 0.04 * specular_gain + metallic * alb_i
@@ -404,7 +427,7 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                     spec_rgb = fresnel * specular
 
                     kd = (1.0 - fresnel) * (1.0 - metallic)
-                    diff_rgb = (kd * alb_i / math.pi)
+                    diff_rgb = kd * alb_i / math.pi
 
                     lit += (diff_rgb + spec_rgb) * l_dir_col * dir_intensity * ndotl * math.pi
 
@@ -439,10 +462,9 @@ def render_png(width: int = 1600, height: int = 1600, mode: str = "relit", ambie
                     alpha_out = a_new + a_old * (1.0 - a_new)
                     if alpha_out <= 1e-4:
                         continue
-                    image[y0 + j, x0 + k, :3] = (
-                        image[y0 + j, x0 + k, :3] * (a_old * (1.0 - a_new) / alpha_out) +
-                        base_rgb * (a_new / alpha_out)
-                    )
+                    image[y0 + j, x0 + k, :3] = image[y0 + j, x0 + k, :3] * (
+                        a_old * (1.0 - a_new) / alpha_out
+                    ) + base_rgb * (a_new / alpha_out)
                     image[y0 + j, x0 + k, 3] = alpha_out
 
     rgba = np.clip(image, 0.0, 1.0)
