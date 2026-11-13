@@ -3,6 +3,7 @@ import math
 import threading
 import time
 from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -10,8 +11,6 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 from PIL import Image
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-
 
 PLY_PATH = Path(__file__).with_name("father-day.ply")
 _RENDER_TIMEOUT = 300  # seconds — abort renders that take longer than this
@@ -335,7 +334,6 @@ def render_png(
 
         rot = quat_to_matrix(rot0[i], rot1[i], rot2[i], rot3[i])
         basis_xv = view_rot @ rot[:, 0]
-        basis_yv = view_rot @ rot[:, 1]
         scale2d = focal / depth
         s0 = math.exp(clamp(scale0[i], -2.5, 1.6)) * 0.0025 * scale2d
 
