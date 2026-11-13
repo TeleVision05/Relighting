@@ -40,6 +40,8 @@ jobs:
         run: npx eslint . --max-warnings=0
       - name: prettier
         run: npx prettier --check .
+      - name: viewer unit tests (Node, no browser or GPU)
+        run: npm test
 
   test:
     name: Tests (Python ${{ matrix.python }})
