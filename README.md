@@ -7,9 +7,10 @@ an intrinsic albedo (Retinex-style), estimates per-splat normals from each
 Gaussian's shortest axis, and re-shades the scene with new lights using a
 Cook-Torrance/GGX BRDF.
 
-**Status: experimental.** The WebGL viewer works and is used by hand; the CPU
-reference renderer is tested but slow and does not yet match the viewer's
-geometry (see [ROADMAP.md](ROADMAP.md) for the concrete gaps).
+**Status: experimental.** The WebGL viewer works and is used by hand. The CPU
+reference renderer draws the same geometry from the same camera: a browser
+test checks that the two agree pixel for pixel on the baked and normals views
+(see [ROADMAP.md](ROADMAP.md) for what is still missing).
 
 ## Layout
 
@@ -42,13 +43,18 @@ geometry (see [ROADMAP.md](ROADMAP.md) for the concrete gaps).
 - `serve.py`: stdlib-only static server for the viewer, with a `/models`
   endpoint and no-cache headers. Opens a browser on start.
 - `static_server.py`: the file policy both servers share (see Servers below).
-- `render_splats.py`: CPU reference renderer in numpy. Writes
+- `render_splats.py`: command line of the CPU reference renderer. Writes
   `rendered_neutral.png` and `rendered_relit.png`, or with `--serve` starts
   `render_server.py`, which serves `GET /render` (plus `/models` and
   `/reload`, which drops the parsed-PLY cache). Query validation lives in
-  `render_params.py`. It is not at feature parity with the viewer: one
-  directional + one point light, no shadows, no normal smoothing, float-only
-  PLY properties.
+  `render_params.py`.
+- `cpu_render/`: the CPU renderer itself, in NumPy. Same world frame,
+  quaternion order (`rot_0 = w`), orbit camera and focal length as the viewer;
+  each splat's full 3D covariance (all three scales) is projected with the
+  perspective Jacobian (EWA splatting) and composited front to back in 16 px
+  tiles. Modes: `relit`, `neutral` (baked), `albedo`, `normals`. It is not at
+  feature parity with the viewer's lighting: one directional + one point light,
+  no shadows, no normal smoothing.
 - `Relighting 3D Gaussian Splatting.md`: design notes and implementation
   status.
 - `Buttons.ply`, `father-day.ply`: sample scenes, stored in Git LFS.
@@ -92,13 +98,17 @@ python3 serve.py --no-browser    # do not open a browser window
 CPU reference renderer:
 
 ```bash
-.venv/bin/python render_splats.py            # writes rendered_*.png from father-day.ply
+.venv/bin/python render_splats.py            # writes rendered_*.png from father-day.ply, 1600x1600
+.venv/bin/python render_splats.py --ply Buttons.ply --width 800 --height 600 --yaw 0.4 --pitch 0.25 --zoom 10
 .venv/bin/python render_splats.py --serve    # viewer + GET /render?mode=relit&w=512&h=512
 ```
 
-`render_splats.py` composites in pure Python per pixel, so use small `w`/`h`
-or a `stride` > 1 for previews. `/render` always renders `father-day.ply`
-(hard-coded `PLY_PATH`) from a fixed camera.
+The camera is the viewer's orbit camera: `--yaw`, `--pitch` and `--zoom` (and
+`yaw`, `pitch`, `zoom` on `/render`) mean the same as the viewer's
+`?cam=yaw,pitch,zoom`, and default to the view the viewer opens with.
+`Buttons.ply` at 800x600 takes about 4 to 7 s per image and 1600x1600 about 10 to
+13 s (measured 2026-11-13 on an Apple M2 Max; the higher figures at a load
+average near 200). The old per-pixel renderer took 25 to 110 s at 800x600. `/render` always renders `father-day.ply` (`PLY_PATH`).
 
 ### Servers: what they expose
 
@@ -114,7 +124,7 @@ answer "not found". If you add a new folder of viewer files, add its name to
 `PUBLIC_DIRS` in `static_server.py`.
 
 `GET /render` checks every setting (`mode`, `w`, `h`, `stride`, light and
-material values) against a range. A bad value gets a `400` whose JSON `error`
+material values, camera) against a range. A bad value gets a `400` whose JSON `error`
 text says which setting is wrong and what is allowed, for example `Image width
 (w) must be a whole number between 16 and 2048`. At most two renders run at
 once; extra requests get a `503` asking to try again.
@@ -128,8 +138,11 @@ once; extra requests get a `503` asking to try again.
 
 The tests build small synthetic splat PLYs, so they do not need the LFS
 models. They cover PLY parsing and the derived normals/albedo, the lighting
-separation, all three CPU render modes, both HTTP servers (the file allow-list,
-loopback binding, `/render` validation and limits), and the WebGL viewer.
+separation, the CPU renderer (normals against analytic fixtures, the projected
+covariance against sampled points, the tile compositor against a plain
+back-to-front blend, all four modes), both HTTP servers (the file allow-list,
+loopback binding, `/render` validation and limits), and the WebGL viewer,
+including a CPU-against-viewer parity test (`tests/viewer/test_cpu_parity.py`).
 
 ### Viewer (browser) tests
 

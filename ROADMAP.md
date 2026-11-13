@@ -11,7 +11,7 @@ What works, and how it was verified:
 | --- | --- | --- |
 | `serve.py` | stdlib static server for the viewer: `/models` lists `*.ply`, no-cache headers, opens a browser | `tests/test_smoke.py::test_static_viewer_server_lists_models` |
 | `index.html` + `src/` (ES modules) | WebGL2 viewer, split pane (left: baked reference, right: relit). Parses the PLY client-side by header (float or byte-encoded colour/opacity, `nxx` typo tolerated), Retinex albedo/irradiance split, shortest-axis normals blended toward a voxel-smoothed field (`N Smooth`), Cook-Torrance/GGX on intrinsic albedo, up to 8 dir/point/spot lights (`MAX_LIGHTS = 8`), ray-marched shadows through a per-model density volume (`traceShadow`, Shadows panel: reach/quality/bias/strength), six G-buffer modes, four presets, `Separate` / `Keep AO` sliders, model picker | ~~manual only; no automated test loads the page in a browser~~ Corrected 2026-11-13: browser tests in `tests/viewer/` (headless Chromium) and Node unit tests of the pure modules in `tests/js/` (`npm test`) |
-| `render_splats.py` | numpy CPU reference: `load_ply`, `separate_lighting`, `render_png` in `relit` / `neutral` / `albedo` modes (one directional + one point light, no shadows, no normal smoothing), `--serve` adds `GET /render`, `/models`, `/reload` | `tests/test_smoke.py` (PLY parse and derived fields, garbage PLY rejected, uniform-scene separation is identity, all three modes at 256x256, `/models` + `/render` over HTTP) |
+| `render_splats.py` + `cpu_render/` | numpy CPU reference: `load_ply`, `separate_lighting`, `render_png` in `relit` / `neutral` / `albedo` / `normals` modes (one directional + one point light, no shadows, no normal smoothing), viewer frame and orbit camera, EWA projection of the full covariance, tile-based front-to-back compositing; `--serve` adds `GET /render`, `/models`, `/reload` | `tests/test_smoke.py`, `tests/test_cpu_render.py`, `tests/viewer/test_cpu_reference.py`, and `tests/viewer/test_cpu_parity.py` (CPU against the viewer, same camera; added 2026-11-13) |
 | Sample scenes | `Buttons.ply` (249,973 splats, 41 MB), `father-day.ply` (471,299 splats, 117 MB) in Git LFS | `git lfs ls-files --size` shows both; `git lfs push --dry-run origin main` is empty (objects are on the remote) |
 
 Test run on 2026-09-25 (`.venv/bin/python -m pytest -q`, Python 3.14.5):
@@ -26,7 +26,15 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 
 ## Known gaps and bugs
 
-1. **Quaternion component order disagrees between the two renderers.**
+1. ~~**Quaternion component order disagrees between the two renderers.**~~
+   Corrected 2026-11-13: `cpu_render/frame.py` reads `rot_0 = w` and applies the
+   same 180 degree X turn as the viewer; `tests/synthetic.py` stores real
+   `rot_0 = w` rotations; `tests/viewer/test_cpu_reference.py` checks CPU normals
+   against analytic ones and fails under the old order (checked by mutation).
+   Evidence for the order on a real file: on `Buttons.ply`, thin-axis normals
+   agree with local surface fits at a median 27.5 degrees reading `rot_0 = w`
+   and 58.8 degrees reading `rot_3 = w` (142 flat splats; random is about 60).
+   The original finding, for the record:
    The viewer (`src/frame.js` `worldQuaternion`; was `index.html:952` before the
    2026-11-13 module split) reads `rot_0=w, rot_1=x, rot_2=y, rot_3=z` (the standard
    3DGS export convention). `render_splats.py::load_ply` unpacks
@@ -36,17 +44,30 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
    rotated wrongly. The test fixture (`tests/test_smoke.py::write_synthetic_ply`,
    `data[:, 13] = 1.0` with the comment "identity quaternion (x,y,z,w)") encodes
    the CPU convention, so the tests cannot catch this.
-2. **CPU 2D covariance uses only `scale_0`.** `render_png` builds `cov00/01/11`
+2. ~~**CPU 2D covariance uses only `scale_0`.**~~ Corrected 2026-11-13:
+   `cpu_render/project.py` builds `R diag(s^2) R^T` from all three scales and
+   projects it with the full perspective Jacobian. Doing so exposed the
+   matching bug in the viewer: its shader used a scaled orthographic Jacobian
+   (no depth column), 40-80% off for off-axis splats against sampled points.
+   The shader now uses the full Jacobian too. Original finding: `render_png` builds `cov00/01/11`
    from `basis_xv` and `s0 = exp(clamp(scale_0)) * 0.0025 * scale2d`; `basis_yv`
    is computed and never used, `scale_1`/`scale_2` are never read. The shader
    (`src/shaders/splat-vert.js`, `VERT`, `fd2 * dot(m0*m0, sc2)`) uses all three. Every CPU
    splat is a scaled disc aligned to one axis, not the real ellipse.
-3. **Per-pixel Python loop.** The compositing in `render_png` is a nested
+3. ~~**Per-pixel Python loop.**~~ Corrected 2026-11-13: `cpu_render/raster.py`
+   composites front to back in 16 px tiles with NumPy. `Buttons.ply` at
+   800x600 went from 24.9 s (neutral) and 40.3 s (relit) to about 4.3 s each,
+   and, timed back to back at a load average near 200, from 109.3 s and 99.8 s
+   to 7.1 s and 7.3 s (Apple M2 Max, 2026-11-13). Original finding: The compositing in `render_png` is a nested
    `for j / for k` over every pixel of every splat's bounding box. Full-size
    renders (default 1600x1600) of the sample scenes take minutes; that is what
    the `_RENDER_TIMEOUT = 300` guard exists for. The README already tells
    users to pass small `w`/`h` or `stride`.
-4. **Different world convention.** The viewer negates Y and Z at load
+4. ~~**Different world convention.**~~ Corrected 2026-11-13: the CPU renderer
+   uses the viewer's frame, orbit camera and focal length, and `yaw`, `pitch`,
+   `zoom` are on `render_png`, `/render` and the command line. The parity test
+   measured at most 0.39/255 mean difference on the fixtures and 0.56/255 on
+   `Buttons.ply` at the default view. Original finding: The viewer negates Y and Z at load
    (`src/frame.js` `worldPosition`; was `index.html:931-932`) and composes a 180 degree X rotation into the
    quaternion; the CPU renderer uses raw PLY coordinates with a hard-coded
    camera (`yaw=-0.45`, `pitch=-0.15`, distance `5.5`, `focal = 0.75 * min(w,h)`)
@@ -81,41 +102,42 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
     whole body as float32, so any PLY with a `uchar` property is mis-read.
     "Reference renderer" therefore means reference for geometry and the
     Retinex split only, not for the lit result.
+    Corrected 2026-11-13 in part: `cpu_render/plyio.py` reads the PLY by the
+    header's property types (byte colours and opacity, doubles), and there are
+    four modes (`normals` added). Lights, shadows and normal smoothing are still
+    behind the viewer, so the lit result is still not a reference.
 
 ## Milestones
 
-### M1. Make the two renderers agree on geometry
+### M1. Make the two renderers agree on geometry (done 2026-11-13)
 
-- [ ] Switch `render_splats.py` to `rot_0 = w` in both `load_ply` and the
-      `quat_to_matrix` call, matching the viewer (`src/frame.js` `worldQuaternion`).
-- [ ] Fix `write_synthetic_ply` so the identity quaternion sets `rot_0 = 1`,
-      and add a test with a non-identity quaternion and anisotropic scales
-      whose expected normal (the rotation matrix column of the shortest axis)
-      is asserted numerically.
-- [ ] Use all three scales in the CPU 2D covariance (port the shader's
-      `fd2 * dot(m0*m0, sc2)` form), delete the `0.0025` magic factor and the
-      unused `basis_yv`.
-- [ ] Apply the viewer's Y/Z negation in the CPU path (or remove it from the
-      viewer) and expose `yaw`, `pitch`, `dist` on `render_png` and `/render`.
-- Done when: a new test renders one elongated synthetic splat through
-  `render_png` and asserts the orientation of its screen-space ellipse;
-  `pytest -q` passes; a CPU render and a viewer screenshot of `Buttons.ply`
-  from the same camera are committed side by side under `docs/` and match by
-  eye.
+- [x] Switch the CPU renderer to `rot_0 = w`, matching the viewer
+      (`cpu_render/frame.py` `world_quaternions`, `src/frame.js` `worldQuaternion`).
+- [x] Fix `write_synthetic_ply`: it now stores real `rot_0 = w` rotations whose
+      thin axis is radial, and `tests/viewer/test_cpu_reference.py` asserts CPU
+      normals against the analytic normals of fixtures with awkward quaternions.
+- [x] Use all three scales: full 3D covariance, projected with the perspective
+      Jacobian (`cpu_render/project.py`); the `0.0025` factor and `basis_yv` are gone.
+- [x] Apply the viewer's Y/Z negation in the CPU path and expose `yaw`, `pitch`,
+      `zoom` on `render_png`, `/render` and the command line.
+- Done when: ~~a CPU render and a viewer screenshot of `Buttons.ply` are committed
+  side by side under `docs/`~~ replaced by `tests/viewer/test_cpu_parity.py`,
+  which compares the two pixel by pixel on every browser-test run (the sample
+  scenes are not under the code licence, so renders of them are not committed).
+  The elongated-splat orientation test is
+  `tests/test_cpu_render.py::test_elongated_splat_lands_with_the_projected_orientation`.
 
-### M2. Make the CPU renderer usable at full resolution
+### M2. Make the CPU renderer usable at full resolution (done 2026-11-13)
 
-- [ ] Replace the per-pixel `for j / for k` compositing with a vectorized
-      "over" on the `image[y0:y1, x0:x1]` slice per splat.
-- [ ] Vectorize projection, culling and inverse-covariance across all splats
-      (one numpy pass, no per-splat Python loop before compositing).
-- [ ] Add a golden test: hash of the synthetic-scene PNG before and after the
-      rewrite must match, so the speedup is provably output-neutral.
-- [ ] Record the timing for `Buttons.ply` at 512x512 and 1600x1600 in the
-      README.
-- Done when: `python render_splats.py` writes both PNGs for `Buttons.ply` at
-  1600x1600 in under 60 s on the owner's machine, with the measured number in
-  the README, and the golden test passes.
+- [x] Replace the per-pixel compositing: tile-based front-to-back NumPy
+      compositing (`cpu_render/raster.py`).
+- [x] Vectorize projection, culling and inverse covariance across all splats.
+- [x] ~~Golden test: PNG hash unchanged by the rewrite~~ not possible, because the
+      geometry fixes change the output on purpose. Instead
+      `test_tile_rasteriser_equals_back_to_front_over` checks the tiles against a
+      plain far-to-near blend of every splat at every pixel.
+- [x] Timing for `Buttons.ply` in the README: about 4 to 7 s per image at
+      800x600 and 10 to 13 s at 1600x1600 (Apple M2 Max, 2026-11-13).
 
 ### M3. Harden both servers and add lint
 
