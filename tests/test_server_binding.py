@@ -105,3 +105,33 @@ def test_port_in_use_is_a_plain_message(capsys):
     assert code == 1
     assert "Try a different port" in err
     assert "Errno" not in err and "Traceback" not in err
+
+
+def test_server_accepts_the_viewers_burst_of_module_requests(tmp_path):
+    """The viewer is about twenty ES modules fetched at once. A listen backlog of 5 (the
+    stdlib default) overflowed on that burst and reset connections, so the page never
+    started. Forty simultaneous requests must all be answered."""
+    import threading
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+
+    (tmp_path / "src").mkdir()
+    for i in range(40):
+        (tmp_path / "src" / f"m{i}.js").write_text(f"export const x = {i};\n")
+
+    def handler(*args, **kwargs):
+        return static_server.SafeStaticHandler(*args, directory=str(tmp_path), **kwargs)
+
+    httpd = static_server.bind_server(handler, static_server.DEFAULT_HOST, 0)
+    assert httpd.request_queue_size >= 64
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        with ThreadPoolExecutor(max_workers=40) as pool:
+            fetch = lambda i: urllib.request.urlopen(f"http://127.0.0.1:{port}/src/m{i}.js", timeout=10)  # noqa: E731
+            responses = list(pool.map(fetch, range(40)))
+        assert [r.status for r in responses] == [200] * 40
+        assert {r.headers["Content-Type"] for r in responses} == {"text/javascript"}
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -14,7 +14,7 @@ import os
 import sys
 import threading
 import time
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:  # the timing probe runs as a script, outside pytest's pythonpath
     sys.path.insert(0, str(ROOT))
 
-from static_server import SafeStaticHandler  # noqa: E402
+from static_server import SafeStaticHandler, ViewerHTTPServer  # noqa: E402
 
 FIXTURE_PREFIX = "/__fixtures__/"
 # Two panes of about 498 x 720 beside the 300 px sidebar. The page's flex layout always
@@ -75,7 +75,7 @@ class ViewerServer:
         def make(*args, **kwargs):
             return handler(*args, directory=str(ROOT), **kwargs)
 
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make)
+        self.httpd = ViewerHTTPServer(("127.0.0.1", 0), make)
         threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         host, port = self.httpd.server_address[:2]
         self.base_url = f"http://{host}:{port}"
@@ -110,9 +110,17 @@ class Viewer:
         """Load the page and wait until the scene is drawn with a finished sort, or the viewer
         reports an error in its status line (a shader that will not compile, a bad file).
         Returns seconds."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
         t0 = time.perf_counter()
         self.page.goto(url)
-        self.page.wait_for_function(_SETTLED_OR_FAILED_JS, timeout=timeout_ms)
+        try:
+            self.page.wait_for_function(_SETTLED_OR_FAILED_JS, timeout=timeout_ms)
+        except PlaywrightTimeout:
+            raise AssertionError(
+                f"viewer did not settle in {timeout_ms} ms: state={self.state()} "
+                f"status={self.status()!r} errors={self.errors}"
+            ) from None
         return time.perf_counter() - t0
 
     def pause(self, on: bool = True) -> None:

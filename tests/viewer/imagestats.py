@@ -6,7 +6,7 @@ import base64
 
 import numpy as np
 
-# gl.clearColor(0.01, 0.015, 0.035) in index.html, as bytes.
+# gl.clearColor(0.01, 0.015, 0.035) in src/renderer.js, as bytes.
 BACKGROUND = np.array([0.01, 0.015, 0.035])
 
 

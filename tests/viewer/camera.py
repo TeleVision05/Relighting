@@ -1,6 +1,6 @@
 """The viewer's orbit camera, mirrored in NumPy so tests can say where geometry lands on screen.
 
-It follows getCamPos, viewRot and focalFor in index.html, and the projection in the splat
+It follows getCamPos, viewRot and focalFor in src/camera.js, and the projection in the splat
 vertex shader. Pixel coordinates here are (column, row) with row 0 at the top, which is
 how ``imagestats.decode_pane`` orders the captured image.
 """

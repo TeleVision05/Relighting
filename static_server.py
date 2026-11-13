@@ -95,6 +95,14 @@ class SafeStaticHandler(SimpleHTTPRequestHandler):
 
     server_version = "RelightingServer"
     sys_version = ""
+    # The viewer is ES modules. Browsers refuse a module script (and, with nosniff, a
+    # stylesheet) whose type is not exact, and mimetypes reads the OS tables, so pin them.
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".js": "text/javascript",
+        ".mjs": "text/javascript",
+        ".css": "text/css",
+    }
     _sent_headers: set = set()
     _target: Path | None = None
 
@@ -205,9 +213,21 @@ def exposure_warning(host: str) -> str | None:
     )
 
 
+class ViewerHTTPServer(ThreadingHTTPServer):
+    """A threading server with room for the viewer's burst of module requests.
+
+    The viewer is about twenty ES module files that the browser requests at once. The
+    stdlib default listen backlog of 5 overflows on that burst and macOS resets the extra
+    connections (net::ERR_CONNECTION_RESET), so the page never starts.
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
+
+
 def bind_server(handler, host: str, port: int) -> ThreadingHTTPServer:
     try:
-        return ThreadingHTTPServer((host, port), handler)
+        return ViewerHTTPServer((host, port), handler)
     except (OSError, OverflowError) as exc:
         log.error("Could not bind %s:%s: %s", host, port, exc)
         raise ServerStartError(

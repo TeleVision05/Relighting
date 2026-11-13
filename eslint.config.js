@@ -24,6 +24,15 @@ export default [
     },
   },
   {
+    // The viewer modules stay small enough to review and test: no file over 500 lines,
+    // no function over 75 (both counted with comments and blank lines).
+    files: ['src/**/*.js'],
+    rules: {
+      'max-lines': ['error', { max: 500 }],
+      'max-lines-per-function': ['error', { max: 75 }],
+    },
+  },
+  {
     // Tooling and Node-side tests.
     files: ['*.js', '*.mjs', 'tests/**/*.js', 'tests/**/*.mjs'],
     languageOptions: {
