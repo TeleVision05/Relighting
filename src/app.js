@@ -20,13 +20,19 @@ import { setNotice, setProgress, setStatus, showError, stageLabel, statusEl } fr
 import { installTestHook, testControl } from './test-hook.js';
 import { applyPreset, getUI, initControls } from './ui.js';
 
-// Default model: ?ply=… query param wins, otherwise DEFAULT_PLY.
-const DEFAULT_PLY = './father-day.ply';
 const URL_PARAMS = new URLSearchParams(location.search);
-const INITIAL_PLY = URL_PARAMS.get('ply') || DEFAULT_PLY;
 const TEST_MODE = URL_PARAMS.get('test') === '1';
 // Cache-busting query strings only on a local dev server (see isLocalHost).
 const LOCAL_DEV = isLocalHost(location.hostname);
+// Default model: ?ply=… query param wins. Otherwise a local copy opens its own sample scene,
+// and a hosted copy (GitHub Pages) the small demo scene published with it. Both are relative
+// to the page, so the viewer works from any sub-path such as /Relighting/.
+const DEFAULT_PLY = LOCAL_DEV ? './father-day.ply' : './demo/demo-scene.ply';
+const INITIAL_PLY = URL_PARAMS.get('ply') || DEFAULT_PLY;
+// The demo scene is small (about 3 units across), so it opens closer than the sample scenes.
+const DEMO_CAM = '0.5,0.35,5.5';
+const INITIAL_CAM =
+  URL_PARAMS.get('cam') || (INITIAL_PLY === DEFAULT_PLY && !LOCAL_DEV ? DEMO_CAM : null);
 const nextTask = () => new Promise((r) => setTimeout(r, 0));
 
 function createPanes() {
@@ -38,7 +44,7 @@ function createPanes() {
   const rR = new Renderer(canvR, true);
   const camL = makeCamera(),
     camR = makeCamera();
-  const camParam = parseCamParam(URL_PARAMS.get('cam'));
+  const camParam = parseCamParam(INITIAL_CAM);
   if (camParam) for (const c of [camL, camR]) Object.assign(c, camParam);
   attachOrbit(canvL, camL, camR);
   attachOrbit(canvR, camR, camL);

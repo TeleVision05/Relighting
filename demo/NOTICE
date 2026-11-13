@@ -1,0 +1,14 @@
+Relighting demo scene (demo-scene.ply)
+
+What it is: a small 3D Gaussian Splatting scene (a chequered floor, two spheres and a
+column; about 34,000 splats, 5.5 MB) that is computed by demo/make_demo_scene.py. It is
+not a photograph or a capture and contains no third-party data. The baked lighting in it
+is a simple "light from above" shading, written by the script.
+
+Licence: MIT, the same as the rest of this repository (see LICENSE), copyright 2026 Tarun
+Vadapalli. You may reuse and redistribute it under those terms.
+
+Not covered: the sample scenes Buttons.ply and father-day.ply in the repository root are
+not part of this demo and are not published with it.
+
+Regenerate: python demo/make_demo_scene.py (the output is deterministic).

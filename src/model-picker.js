@@ -2,8 +2,10 @@
 
 import { isLocalHost } from './fetch-scene.js';
 
-// Always offered in the dropdown, even without the /models endpoint.
+// Always offered in the dropdown, even without the /models endpoint. A hosted copy ships only
+// the demo scene, so it must not offer files that are not there.
 export const KNOWN_PLYS = ['father-day.ply', 'Buttons.ply'];
+export const HOSTED_PLYS = ['demo/demo-scene.ply'];
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 export async function refreshModelList(selected) {
   const pathEl = $('plyPath'),
     pickEl = $('plyPick');
-  let files = KNOWN_PLYS.slice();
+  let files = (isLocalHost(location.hostname) ? KNOWN_PLYS : HOSTED_PLYS).slice();
   try {
     const bust = isLocalHost(location.hostname) ? '?_=' + Date.now() : '';
     const r = await fetch('./models' + bust, { cache: 'no-store' });

@@ -12,6 +12,23 @@ reference renderer draws the same geometry from the same camera: a browser
 test checks that the two agree pixel for pixel on the baked and normals views
 (see [ROADMAP.md](ROADMAP.md) for what is still missing).
 
+## Live demo
+
+**[Open the live demo](https://television05.github.io/Relighting/)**: the viewer running in your
+browser, with nothing to install. (It goes live once this branch is merged to `main`: the
+`Pages` workflow publishes the site on every push to `main`.)
+
+The demo opens a small synthetic scene (a chequered floor, two spheres and a column, about
+34,000 splats, 5.5 MB) with the baked appearance on the left and the relit result on the right.
+Drag to orbit, scroll to zoom, then move the lights, try the presets and the G-buffer views. Its
+limits: the scene is computed by [`demo/make_demo_scene.py`](demo/make_demo_scene.py), not captured
+from a real place, so it shows the lighting model rather than a photographic result; it needs a
+browser with WebGL2 (a recent Chrome, Edge, Firefox or Safari) and runs entirely on your device;
+and the sample scenes `Buttons.ply` and `father-day.ply` are not published (see Licence), though
+"Open file..." still lets you view a 3DGS `.ply` of your own, which never leaves your computer.
+The scene is under the MIT licence; see [`demo/NOTICE`](demo/NOTICE). To build the same site
+locally: `python demo/assemble_site.py _site`, then serve `_site` with any static file server.
+
 ## Layout
 
 - `index.html` + `src/`: the WebGL2 viewer (main UI). Split view: left pane
@@ -21,7 +38,7 @@ test checks that the two agree pixel for pixel on the baked and normals views
   cyber, day), material sliders, `Separate` / `Keep AO` / `N Smooth`, six
   G-buffer modes (relit, intrinsic albedo, baked SH DC, baked irradiance/AO,
   surface normals, specular only) and a model picker. Loads
-  `father-day.ply` by default; `?ply=Buttons.ply` picks another.
+  `father-day.ply` by default (the hosted copy: `demo/demo-scene.ply`); `?ply=Buttons.ply` picks another.
   `index.html` is only the page; the code is native ES modules in `src/`
   with no build step, so the folder can be hosted as static files:
 
@@ -58,6 +75,7 @@ test checks that the two agree pixel for pixel on the baked and normals views
 - `Relighting 3D Gaussian Splatting.md`: design notes and implementation
   status.
 - `Buttons.ply`, `father-day.ply`: sample scenes, stored in Git LFS.
+- `demo/`: the demo scene for the hosted copy (`demo-scene.ply`, generated, plain Git), its generator, its `NOTICE`, and `assemble_site.py`, which builds the folder that the `Pages` workflow publishes.
 - `tests/`: Python tests (`tests/*.py`), browser tests of the viewer
   (`tests/viewer/`) and Node unit tests of the viewer's pure modules
   (`tests/js/`).

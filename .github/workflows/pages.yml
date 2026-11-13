@@ -1,0 +1,45 @@
+name: Pages
+
+# Publishes the viewer and its demo scene to GitHub Pages when main changes.
+# The site is static: the viewer plus demo/demo-scene.ply, nothing else.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Assemble the site
+    runs-on: ubuntu-latest
+    steps:
+      # The demo scene is a plain Git file, not an LFS object, so LFS is not needed.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/configure-pages@v5
+      - name: Assemble the static site
+        run: python3 demo/assemble_site.py _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write # deploy to Pages
+      id-token: write # prove to Pages that the deploy comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
