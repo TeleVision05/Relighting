@@ -2,12 +2,9 @@ import argparse
 import math
 import threading
 import time
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 from PIL import Image
@@ -473,114 +470,27 @@ def render_png(
     return buffer.getvalue()
 
 
-class RenderHandler(SimpleHTTPRequestHandler):
-    def _send_json(self, payload) -> None:
-        import json
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="CPU reference renderer for the relighting viewer.")
+    parser.add_argument("--serve", action="store_true", help="serve the viewer and GET /render instead of writing PNGs")
+    parser.add_argument("--port", type=int, default=8000, help="port for --serve (default 8000)")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="address for --serve (default 127.0.0.1, this computer only; 0.0.0.0 exposes it to your network)",
+    )
+    args = parser.parse_args(argv)
+    if args.serve:
+        from render_server import serve  # imported here: render_server imports this module
 
-        body = json.dumps(payload).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def end_headers(self) -> None:
-        # Never let the browser cache assets — swapping a .ply on disk must take
-        # effect on the next request, not after a hard refresh.
-        if "Cache-Control" not in self._headers_buffer_names():
-            self.send_header("Cache-Control", "no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
-        super().end_headers()
-
-    def _headers_buffer_names(self) -> set:
-        names = set()
-        for raw in getattr(self, "_headers_buffer", []) or []:
-            line = raw.decode("latin-1", "replace")
-            if ":" in line:
-                names.add(line.split(":", 1)[0].strip())
-        return names
-
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        if parsed.path == "/models":
-            root = Path(self.directory) if getattr(self, "directory", None) else Path.cwd()
-            names = sorted(p.name for p in root.glob("*.ply"))
-            self._send_json(names)
-            return
-        if parsed.path == "/reload":
-            invalidate_ply_cache()
-            self._send_json({"ok": True, "ply": PLY_PATH.name})
-            return
-        if parsed.path == "/render":
-            params = parse_qs(parsed.query)
-            mode = params.get("mode", ["relit"])[0]
-            ambient = float(params.get("ambient", ["0.20"])[0])
-            dir_intensity = float(params.get("dirInt", ["1.5"])[0])
-            dir_x = float(params.get("dirX", ["0.5"])[0])
-            dir_y = float(params.get("dirY", ["0.7"])[0])
-            dir_z = float(params.get("dirZ", ["0.5"])[0])
-            point_intensity = float(params.get("pointInt", ["1.0"])[0])
-            point_x = float(params.get("pointX", ["1.2"])[0])
-            point_y = float(params.get("pointY", ["1.5"])[0])
-            point_z = float(params.get("pointZ", ["0.8"])[0])
-            roughness = float(params.get("roughness", ["0.30"])[0])
-            metallic = float(params.get("metallic", ["0.10"])[0])
-            separation = float(params.get("sep", ["1.0"])[0])
-            keep_ao = float(params.get("keepAO", ["0.0"])[0])
-            width = int(clamp(int(params.get("w", ["1600"])[0]), 16, 2048))
-            height = int(clamp(int(params.get("h", ["1600"])[0]), 16, 2048))
-            stride = int(clamp(int(params.get("stride", ["1"])[0]), 1, 64))
-
-            png = render_png(
-                width=width,
-                height=height,
-                stride=stride,
-                mode=mode,
-                ambient=ambient,
-                dir_intensity=dir_intensity,
-                dir_x=dir_x,
-                dir_y=dir_y,
-                dir_z=dir_z,
-                point_intensity=point_intensity,
-                point_x=point_x,
-                point_y=point_y,
-                point_z=point_z,
-                roughness=roughness,
-                metallic=metallic,
-                separation=separation,
-                keep_ao=keep_ao,
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", "image/png")
-            self.send_header("Content-Length", str(len(png)))
-            self.end_headers()
-            self.wfile.write(png)
-            return
-        super().do_GET()
-
-    def log_message(self, format: str, *args) -> None:
-        return
-
-
-def serve(port: int = 8000) -> None:
-    handler = partial(RenderHandler, directory=str(Path.cwd()))
-    with ThreadingHTTPServer(("0.0.0.0", port), handler) as httpd:
-        print(f"Serving on http://127.0.0.1:{port}")
-        httpd.serve_forever()
+        return serve(args.host, args.port)
+    out = Path("rendered_neutral.png")
+    out.write_bytes(render_png(mode="neutral"))
+    out2 = Path("rendered_relit.png")
+    out2.write_bytes(render_png(mode="relit"))
+    print("Successfully rendered:", out, out2)
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--serve", action="store_true")
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    if args.serve:
-        serve(args.port)
-    else:
-        out = Path("rendered_neutral.png")
-        out.write_bytes(render_png(mode="neutral"))
-        out2 = Path("rendered_relit.png")
-        out2.write_bytes(render_png(mode="relit"))
-        print("Successfully rendered:", out, out2)
+    raise SystemExit(main())
