@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { planeNormals, symEigenSmallest } from '../../src/normals.js';
+import { MIN_FIT_SPLATS, planeNormals, symEigenSmallest } from '../../src/normals.js';
 import { close, dot, rng } from './helpers.js';
 
 const unit = (v) => {
@@ -114,4 +114,63 @@ test('with no opaque splat the raw normals come back unchanged', () => {
   const out = fit(c);
   assert.deepEqual(out.nsx, c.nx);
   assert.notEqual(out.nsx, c.nx, 'a copy, not the same array');
+});
+
+// A Fibonacci sphere like tests/viewer/splat_scenes.py's (radius 1), with raw normals that are
+// the true radial ones, random sign, ~1.5 degrees of jitter.
+function sparseSphere(n) {
+  const rand = rng(4);
+  const f = () => new Float32Array(n);
+  const c = { px: f(), py: f(), pz: f(), nx: f(), ny: f(), nz: f(), op: f().fill(0.95) };
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (2 * (i + 0.5)) / n,
+      r = Math.sqrt(1 - y * y);
+    [c.px[i], c.py[i], c.pz[i]] = [Math.cos(golden * i) * r, y, Math.sin(golden * i) * r];
+    const raw = unit([c.px[i], c.py[i], c.pz[i]].map((v) => v + (rand() * 2 - 1) * 0.025));
+    const sign = rand() < 0.5 ? -1 : 1;
+    [c.nx[i], c.ny[i], c.nz[i]] = raw.map((v) => v * sign);
+  }
+  return c;
+}
+
+function angleErrors(c, out) {
+  const errs = [];
+  for (let i = 0; i < c.px.length; i++) {
+    const d = Math.abs(out.nsx[i] * c.px[i] + out.nsy[i] * c.py[i] + out.nsz[i] * c.pz[i]);
+    errs.push((Math.acos(Math.min(1, d)) * 180) / Math.PI);
+  }
+  return errs.sort((a, b) => a - b);
+}
+
+test('a sparse surface is not fitted through a handful of splats', () => {
+  // 4,000 splats on a unit sphere at grid 64 leaves about three per neighbourhood. Three
+  // points always fit a plane exactly, so without a minimum the fit was accepted wherever
+  // they happened to fall: p99 error 72 degrees, 4.3% of splats off by over 20 (measured
+  // 2026-11-13 with minSplats 0, which this test also runs to show it still detects that).
+  const c = sparseSphere(4000);
+  const p99 = (e) => e[Math.floor(0.99 * e.length)];
+  const fixed = angleErrors(c, fit(c));
+  assert.ok(p99(fixed) < 5, `p99 ${p99(fixed).toFixed(1)} deg`);
+  assert.equal(fixed.filter((e) => e > 20).length, 0);
+  const old = angleErrors(c, planeNormals(c.px, c.py, c.pz, c.nx, c.ny, c.nz, c.op, 4000, 64, 0));
+  assert.ok(p99(old) > 20, 'with no minimum the old failure comes back');
+});
+
+test('sparse random splats keep their raw normals instead of a three-point fit', () => {
+  const rand = rng(9);
+  const N = 30000; // about 3 per neighbourhood at grid 64
+  const f = () => new Float32Array(N);
+  const c = { px: f(), py: f(), pz: f(), nx: f(), ny: f(), nz: f(), op: f().fill(0.9) };
+  for (let i = 0; i < N; i++) {
+    [c.px[i], c.py[i], c.pz[i]] = [rand(), rand(), rand()];
+    [c.nx[i], c.ny[i], c.nz[i]] = unit([rand() - 0.5, rand() - 0.5, rand() - 0.5]);
+  }
+  const out = fit(c);
+  let kept = 0;
+  for (let i = 0; i < N; i++) if (out.nsx[i] === c.nx[i] && out.nsz[i] === c.nz[i]) kept++;
+  // Measured 2026-11-13: 14.8% kept with no minimum, 96.3% with MIN_FIT_SPLATS = 8 (the rest
+  // are neighbourhoods that by chance hold 8 or more splats).
+  assert.ok(kept / N > 0.9, `only ${((100 * kept) / N).toFixed(1)}% kept their raw normal`);
+  assert.ok(MIN_FIT_SPLATS >= 6, 'a fit needs clearly more than three splats');
 });

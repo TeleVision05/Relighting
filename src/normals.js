@@ -69,10 +69,19 @@ export function symEigenSmallest(xx, yy, zz, xy, xz, yz) {
   return { v: [best[0] * inv, best[1] * inv, best[2] * inv], l0, l1 };
 }
 
-// The ten weighted moment sums kept per voxel, in this order: weight, the three first
-// moments and the six distinct second moments.
-const MOMENTS = ['w', 'x', 'y', 'z', 'xx', 'yy', 'zz', 'xy', 'xz', 'yz'];
+// The sums kept per voxel, in this order: weight, the three first moments, the six
+// distinct second moments (all opacity-weighted), and the plain count of splats.
+const MOMENTS = ['w', 'x', 'y', 'z', 'xx', 'yy', 'zz', 'xy', 'xz', 'yz', 'n'];
 const WEIGHT = 0;
+const COUNT = 10;
+
+// Fewest splats a 3×3×3 neighbourhood needs before its plane fit is trusted. Any three
+// points are exactly coplanar, so a fit through a handful of sparse splats reports perfect
+// planarity whatever their layout. Measured 2026-11-13 (tests/js/normals.test.js): on a
+// 4,000-splat unit sphere, no minimum gave p99 error 72 degrees with 4.3% of splats over 20;
+// any minimum from 4 up gives p99 2 degrees. At 8, 0.15% of Buttons.ply's splats and 0.03%
+// of father-day.ply's fall back to their own axis; a dense sphere is unchanged up to 24.
+export const MIN_FIT_SPLATS = 8;
 
 function cellOfAxis(v, min, ext, res) {
   return Math.max(0, Math.min(res - 1, (((v - min) / ext) * (res - 1)) | 0));
@@ -107,6 +116,7 @@ export function voxelMoments(px, py, pz, op, N, box, res) {
     m[7][f] += w * X * Y;
     m[8][f] += w * X * Z;
     m[9][f] += w * Y * Z;
+    m[COUNT][f] += 1;
   }
   return { m, cellOf };
 }
@@ -132,10 +142,11 @@ function gatherNeighbourhood(m, res, x, y, z, acc) {
   return acc;
 }
 
-// Plane normal from neighbourhood moments, or null when the patch is not planar enough.
-export function fitPlane(acc) {
-  const [W, AX, AY, AZ, AXX, AYY, AZZ, AXY, AXZ, AYZ] = acc;
-  if (W <= 1e-6) return null;
+// Plane normal from neighbourhood moments, or null when the patch is too sparse to judge
+// or not planar enough.
+export function fitPlane(acc, minSplats = MIN_FIT_SPLATS) {
+  const [W, AX, AY, AZ, AXX, AYY, AZZ, AXY, AXZ, AYZ, count] = acc;
+  if (W <= 1e-6 || count < minSplats) return null;
   const iW = 1 / W,
     mx = AX * iW,
     my = AY * iW,
@@ -156,7 +167,7 @@ export function fitPlane(acc) {
 
 // Per-voxel plane fit over the 3×3×3 neighbourhood: normals (xyz per cell) and a mask of
 // the cells whose fit was accepted.
-export function fitVoxelPlanes(m, res) {
+export function fitVoxelPlanes(m, res, minSplats = MIN_FIT_SPLATS) {
   const cells = res * res * res;
   const vn = new Float32Array(cells * 3);
   const vok = new Uint8Array(cells);
@@ -166,7 +177,7 @@ export function fitVoxelPlanes(m, res) {
       for (let x = 0; x < res; x++) {
         const f = x + res * (y + res * z);
         if (m[WEIGHT][f] <= 0) continue; // only fit where splats live
-        const v = fitPlane(gatherNeighbourhood(m, res, x, y, z, acc));
+        const v = fitPlane(gatherNeighbourhood(m, res, x, y, z, acc), minSplats);
         if (!v) continue;
         vn[f * 3] = v[0];
         vn[f * 3 + 1] = v[1];
@@ -178,7 +189,18 @@ export function fitVoxelPlanes(m, res) {
   return { vn, vok };
 }
 
-export function planeNormals(px, py, pz, nx, ny, nz, op, N, gridRes = 64) {
+export function planeNormals(
+  px,
+  py,
+  pz,
+  nx,
+  ny,
+  nz,
+  op,
+  N,
+  gridRes = 64,
+  minSplats = MIN_FIT_SPLATS,
+) {
   const { min, max } = opaqueBounds(px, py, pz, op, N);
   if (!(min[0] <= max[0])) {
     // no usable splats
@@ -186,7 +208,7 @@ export function planeNormals(px, py, pz, nx, ny, nz, op, N, gridRes = 64) {
   }
   const ext = [0, 1, 2].map((a) => Math.max(1e-6, max[a] - min[a]));
   const { m, cellOf } = voxelMoments(px, py, pz, op, N, { min, ext }, gridRes);
-  const { vn, vok } = fitVoxelPlanes(m, gridRes);
+  const { vn, vok } = fitVoxelPlanes(m, gridRes, minSplats);
 
   const nsx = new Float32Array(N),
     nsy = new Float32Array(N),

@@ -57,17 +57,13 @@ def sphere_hits(cam, h: int, w: int, radius: float):
     return normal, (disc > 0) & (miss_distance < 0.85 * radius)
 
 
-@pytest.mark.parametrize(
-    "smooth, p90_limit",
-    [
-        (0.0, 6.0),
-        # The plane fit (planeNormals) also accepts fits from only a few splats, so on this
-        # sparse sphere about 2% of pixels are off by more than 20 degrees (measured
-        # 2026-11-13). The bulk of the surface still has to be right.
-        (1.0, 10.0),
-    ],
-)
-def test_sphere_normals_point_outwards_everywhere(open_scene, smooth, p90_limit):
+# Smoothing 1.0 shows only the plane-fit normals. This sphere is sparse (about three
+# splats per fit neighbourhood), and planeNormals used to accept a fit through any three
+# splats, which always looks perfectly planar: 1.8% of pixels were off by more than 20
+# degrees and p90 needed a 10 degree allowance (measured 2026-11-13). Fits now need
+# MIN_FIT_SPLATS splats (src/normals.js), so both settings meet the same bar.
+@pytest.mark.parametrize("smooth", [0.0, 1.0])
+def test_sphere_normals_point_outwards_everywhere(open_scene, smooth):
     viewer = open_scene("sphere")
     img, normals = rendered_normals(viewer, smooth)
     h, w, _ = img.shape
@@ -76,4 +72,5 @@ def test_sphere_normals_point_outwards_everywhere(open_scene, smooth, p90_limit)
     errors = angle_deg(normals[mask], expected[mask])
     assert mask.sum() > 15_000
     assert np.median(errors) < 5.0, summary(errors)
-    assert np.percentile(errors, 90) < p90_limit, summary(errors)
+    assert np.percentile(errors, 90) < 6.0, summary(errors)
+    assert np.mean(errors > 20) < 0.002, f"{np.mean(errors > 20):.2%} of pixels off by over 20 deg"
