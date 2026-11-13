@@ -81,6 +81,14 @@ models or a browser. They cover PLY parsing and the derived normals/albedo,
 the lighting separation, all three CPU render modes, and both HTTP servers.
 The WebGL viewer itself has no automated test yet.
 
+## Licence
+
+The code is released under the [MIT licence](LICENSE), copyright 2026 Tarun
+Vadapalli. **The sample scenes (`Buttons.ply`, `father-day.ply` and anything
+derived from them) are not covered by that licence.** They are included only
+so the viewer has something to show; do not reuse or redistribute them without
+checking with the owner.
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for current state, known bugs, milestones and
