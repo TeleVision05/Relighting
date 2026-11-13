@@ -31,8 +31,14 @@ def _bin(proj: Projected, width: int, height: int, tile: int) -> tuple[np.ndarra
     Splats must already be in front-to-back order: a stable sort keeps that order in a tile.
     """
     tiles_x, tiles_y = -(-width // tile), -(-height // tile)
-    lo = np.floor((proj.mean - proj.radius[:, None]) / tile).astype(np.int64)
-    hi = np.floor((proj.mean + proj.radius[:, None]) / tile).astype(np.int64)
+    # Axis-aligned box of the 3-sigma ellipse (tighter than the circle of proj.radius for
+    # elongated splats): half-sizes 3 sqrt(cov_xx), 3 sqrt(cov_yy), from the conic's inverse.
+    a, b, c = proj.conic.T
+    det = np.maximum(a * c - b * b, 1e-30)
+    half = SIGMA_CUTOFF * np.sqrt(np.stack([c / det, a / det], axis=1))
+    half = np.minimum(half, proj.radius[:, None])
+    lo = np.floor((proj.mean - half) / tile).astype(np.int64)
+    hi = np.floor((proj.mean + half) / tile).astype(np.int64)
     lo = np.maximum(lo, 0)
     hi = np.minimum(hi, [tiles_x - 1, tiles_y - 1])
     span = np.maximum(hi - lo + 1, 0)
