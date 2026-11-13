@@ -10,7 +10,7 @@ What works, and how it was verified:
 | Piece | What it does | Verified by |
 | --- | --- | --- |
 | `serve.py` | stdlib static server for the viewer: `/models` lists `*.ply`, no-cache headers, opens a browser | `tests/test_smoke.py::test_static_viewer_server_lists_models` |
-| `index.html` | WebGL2 viewer, split pane (left: baked reference, right: relit). Parses the PLY client-side by header (float or byte-encoded colour/opacity, `nxx` typo tolerated), Retinex albedo/irradiance split, shortest-axis normals blended toward a voxel-smoothed field (`N Smooth`), Cook-Torrance/GGX on intrinsic albedo, up to 8 dir/point/spot lights (`MAX_LIGHTS = 8`), ray-marched shadows through a per-model density volume (`traceShadow`, Shadows panel: reach/quality/bias/strength), six G-buffer modes, four presets, `Separate` / `Keep AO` sliders, model picker | manual only; no automated test loads the page in a browser |
+| `index.html` + `src/` (ES modules) | WebGL2 viewer, split pane (left: baked reference, right: relit). Parses the PLY client-side by header (float or byte-encoded colour/opacity, `nxx` typo tolerated), Retinex albedo/irradiance split, shortest-axis normals blended toward a voxel-smoothed field (`N Smooth`), Cook-Torrance/GGX on intrinsic albedo, up to 8 dir/point/spot lights (`MAX_LIGHTS = 8`), ray-marched shadows through a per-model density volume (`traceShadow`, Shadows panel: reach/quality/bias/strength), six G-buffer modes, four presets, `Separate` / `Keep AO` sliders, model picker | ~~manual only; no automated test loads the page in a browser~~ Corrected 2026-11-13: browser tests in `tests/viewer/` (headless Chromium) and Node unit tests of the pure modules in `tests/js/` (`npm test`) |
 | `render_splats.py` | numpy CPU reference: `load_ply`, `separate_lighting`, `render_png` in `relit` / `neutral` / `albedo` modes (one directional + one point light, no shadows, no normal smoothing), `--serve` adds `GET /render`, `/models`, `/reload` | `tests/test_smoke.py` (PLY parse and derived fields, garbage PLY rejected, uniform-scene separation is identity, all three modes at 256x256, `/models` + `/render` over HTTP) |
 | Sample scenes | `Buttons.ply` (249,973 splats, 41 MB), `father-day.ply` (471,299 splats, 117 MB) in Git LFS | `git lfs ls-files --size` shows both; `git lfs push --dry-run origin main` is empty (objects are on the remote) |
 
@@ -27,7 +27,8 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 ## Known gaps and bugs
 
 1. **Quaternion component order disagrees between the two renderers.**
-   `index.html:952` reads `rot_0=w, rot_1=x, rot_2=y, rot_3=z` (the standard
+   The viewer (`src/frame.js` `worldQuaternion`; was `index.html:952` before the
+   2026-11-13 module split) reads `rot_0=w, rot_1=x, rot_2=y, rot_3=z` (the standard
    3DGS export convention). `render_splats.py::load_ply` unpacks
    `qx, qy, qz, qw = rot_0..rot_3` and `render_png` calls
    `quat_to_matrix(rot0, rot1, rot2, rot3)` whose signature is `(qx, qy, qz, qw)`.
@@ -38,7 +39,7 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 2. **CPU 2D covariance uses only `scale_0`.** `render_png` builds `cov00/01/11`
    from `basis_xv` and `s0 = exp(clamp(scale_0)) * 0.0025 * scale2d`; `basis_yv`
    is computed and never used, `scale_1`/`scale_2` are never read. The shader
-   (`index.html`, `VERT`, `fd2 * dot(m0*m0, sc2)`) uses all three. Every CPU
+   (`src/shaders/splat-vert.js`, `VERT`, `fd2 * dot(m0*m0, sc2)`) uses all three. Every CPU
    splat is a scaled disc aligned to one axis, not the real ellipse.
 3. **Per-pixel Python loop.** The compositing in `render_png` is a nested
    `for j / for k` over every pixel of every splat's bounding box. Full-size
@@ -46,7 +47,7 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
    the `_RENDER_TIMEOUT = 300` guard exists for. The README already tells
    users to pass small `w`/`h` or `stride`.
 4. **Different world convention.** The viewer negates Y and Z at load
-   (`index.html:931-932`) and composes a 180 degree X rotation into the
+   (`src/frame.js` `worldPosition`; was `index.html:931-932`) and composes a 180 degree X rotation into the
    quaternion; the CPU renderer uses raw PLY coordinates with a hard-coded
    camera (`yaw=-0.45`, `pitch=-0.15`, distance `5.5`, `focal = 0.75 * min(w,h)`)
    that nothing can change from `/render`. The two outputs cannot be compared
@@ -59,9 +60,13 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 6. **`render_splats.py --serve` binds `0.0.0.0`** (`serve()`), exposing the
    directory listing, the LFS scenes and a CPU-bound endpoint on every
    interface; `serve.py` correctly binds `127.0.0.1`.
-7. **WebGL viewer is untested.** `test_static_viewer_server_lists_models`
+7. ~~**WebGL viewer is untested.** `test_static_viewer_server_lists_models`
    serves a stub `<html></html>`, not the real page. Shader compile errors or a
-   broken PLY parse in `index.html` would not fail any test.
+   broken PLY parse in `index.html` would not fail any test.~~ Corrected
+   2026-11-13: `tests/viewer/` loads the real page in headless Chromium and
+   checks images against scenes with known geometry, and `tests/js/` unit-tests
+   the parser, frame conversion, lighting split and normals directly. Breaking
+   the quaternion remap or the Y/Z flip fails both suites (checked by mutation).
 8. **Higher-order SH bands (`f_rest_*`) are ignored** by both renderers; only
    DC is used for appearance (documented in the design notes as intentional
    for albedo, but it also throws away the view-dependent signal that could
@@ -82,7 +87,7 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 ### M1. Make the two renderers agree on geometry
 
 - [ ] Switch `render_splats.py` to `rot_0 = w` in both `load_ply` and the
-      `quat_to_matrix` call, matching `index.html:952`.
+      `quat_to_matrix` call, matching the viewer (`src/frame.js` `worldQuaternion`).
 - [ ] Fix `write_synthetic_ply` so the identity quaternion sets `rot_0 = 1`,
       and add a test with a non-identity quaternion and anisotropic scales
       whose expected normal (the rotation matrix column of the shortest axis)
@@ -147,7 +152,7 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 - [ ] Use the `f_rest_*` SH bands to estimate a view-independent diffuse term
       instead of DC only, and feed the residual into the specular estimate.
 - [ ] Port the viewer's dynamic shadows to the CPU renderer. The viewer
-      already has them (`index.html` "SHADOW OCCUPANCY VOLUME": density volume
+      already has them (`src/occupancy.js`: density volume
       baked once per model, `traceShadow` marches it toward each light in the
       vertex shader); `render_splats.py` has none, so `/render` output can
       never match the viewer under a new light.
@@ -171,7 +176,7 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 ## Open questions for the owner
 
 1. Which tool exported `Buttons.ply` and `father-day.ply`? M1 assumes the
-   standard `rot_0 = w` layout that `index.html` uses; confirming the exporter
+   standard `rot_0 = w` layout that the viewer uses; confirming the exporter
    settles it without guessing from renders.
 2. Is the CPU renderer meant to stay a reference for the shader, or to become
    the offline high-resolution path? If reference only, M2 can be deprioritized

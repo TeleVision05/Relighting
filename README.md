@@ -13,14 +13,32 @@ geometry (see [ROADMAP.md](ROADMAP.md) for the concrete gaps).
 
 ## Layout
 
-- `index.html`: the WebGL2 viewer (main UI). Split view: left pane is the
-  baked SH appearance (reference), right pane is the relit result. Up to 8
-  lights (directional / point / spot, `MAX_LIGHTS = 8`) with ray-marched
+- `index.html` + `src/`: the WebGL2 viewer (main UI). Split view: left pane
+  is the baked SH appearance (reference), right pane is the relit result. Up
+  to 8 lights (directional / point / spot, `MAX_LIGHTS = 8`) with ray-marched
   shadows through a per-model density volume, four presets (studio, sunset,
   cyber, day), material sliders, `Separate` / `Keep AO` / `N Smooth`, six
   G-buffer modes (relit, intrinsic albedo, baked SH DC, baked irradiance/AO,
   surface normals, specular only) and a model picker. Loads
   `father-day.ply` by default; `?ply=Buttons.ply` picks another.
+  `index.html` is only the page; the code is native ES modules in `src/`
+  with no build step, so the folder can be hosted as static files:
+
+  | module | what it does |
+  |---|---|
+  | `app.js` | entry point: panes, controls, loading, render loop |
+  | `load-worker.js`, `scene-loader.js`, `fetch-scene.js` | download and preprocess a scene in a module worker (main-thread fallback), progress |
+  | `pipeline.js`, `stages.js` | parse → normals → lighting split → pack, and the progress stages |
+  | `ply.js`, `frame.js` | PLY header and decode; export-frame flip and quaternion remap |
+  | `intrinsics.js`, `normals.js`, `occupancy.js`, `pack.js` | Retinex split, plane-fit normals, shadow volume, GPU packing |
+  | `renderer.js`, `gizmos.js`, `gl.js`, `shaders/` | WebGL2 panes, light markers, GLSL |
+  | `sort.js`, `sort-worker.js` | per-frame depth sort in a worker |
+  | `ui.js`, `lights.js`, `presets.js`, `camera.js`, `model-picker.js` | sidebar, light rig, orbit camera |
+  | `errors.js`, `status.js` | plain-language error messages, status line, progress bar |
+  | `test-hook.js` | `?test=1` handle for the browser tests |
+
+  Everything except the page modules (`app.js`, `ui.js`, `renderer.js`, ...)
+  is pure (no DOM, no GL) and unit-tested under Node.
 - `serve.py`: stdlib-only static server for the viewer, with a `/models`
   endpoint and no-cache headers. Opens a browser on start.
 - `static_server.py`: the file policy both servers share (see Servers below).
@@ -34,7 +52,9 @@ geometry (see [ROADMAP.md](ROADMAP.md) for the concrete gaps).
 - `Relighting 3D Gaussian Splatting.md`: design notes and implementation
   status.
 - `Buttons.ply`, `father-day.ply`: sample scenes, stored in Git LFS.
-- `tests/`: headless smoke tests on a synthetic PLY.
+- `tests/`: Python tests (`tests/*.py`), browser tests of the viewer
+  (`tests/viewer/`) and Node unit tests of the viewer's pure modules
+  (`tests/js/`).
 
 ## Install
 
@@ -44,7 +64,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 The viewer (`serve.py` + `index.html`) needs only Python 3 (stdlib) and a
-WebGL2 browser. The venv is only for `render_splats.py` (numpy, pillow) and
+WebGL2 browser with ES modules in workers (current Chrome, Edge, Firefox,
+Safari).
+
+When a load fails, the viewer says what happened and what to do in plain
+language (file not found, not a 3DGS PLY, a Git LFS placeholder that was never
+pulled, no WebGL2, out of memory, graphics set-up failure); the raw error is in
+the browser console. Scene requests carry a cache-busting `?_=` query string
+only when the page is served from this computer (`localhost`, `127.x`); Reload
+always asks for a fresh copy. The venv is only for `render_splats.py` (numpy, pillow) and
 the tests, which need **Python 3.10+** (`render_splats.py` uses a `X | None`
 annotation at module level); verified on 3.12, 3.13 and 3.14.5 on 2026-09-25.
 
@@ -128,8 +156,11 @@ parameters: `?cam=yaw,pitch,zoom` sets the starting camera (also handy for
 sharing a view), and `?test=1` exposes `window.__relightTest` (read back the
 panes, pause the render loop). Neither changes anything when absent.
 
-Timing probe (prints, never fails): load, preprocess and frame times on the
-synthetic scenes and on any real scene you pass.
+Timing probe (prints, never fails): load, preprocess, main-thread blocking
+and frame times on the synthetic scenes and on any real scene you pass.
+Measured 2026-11-13 on Metal (Apple M2 Max), headless Chromium: loading
+`Buttons.ply` blocked the main thread for 393-465 ms before parsing moved into
+a worker and 65-103 ms after (one long task, the GPU upload).
 
 ```bash
 .venv/bin/python tests/viewer/timing_probe.py --ply Buttons.ply   # --gl auto|gpu|software
@@ -144,7 +175,14 @@ npm ci                           # eslint + prettier
 npx eslint . && npx prettier --check .
 ```
 
-The same checks run in CI (`.github/workflows/ci.yml`).
+Viewer unit tests (Node 22+, no browser or GPU):
+
+```bash
+npm test                         # node --test "tests/js/*.test.js"
+```
+
+The same checks run in CI (`.github/workflows/ci.yml`). eslint also enforces
+the size limits on `src/`: no file over 500 lines, no function over 75.
 
 ## Licence
 
