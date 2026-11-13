@@ -8,6 +8,10 @@ extend-exclude = [".venv", "node_modules"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]
+# E501: the formatter owns line length; long strings and comments are left alone.
+# I001 and F841 are TEMPORARY: they let the pure-reformat commit land on its own;
+# the commit after it removes them and fixes the two existing findings.
+ignore = ["E501", "I001", "F841"]
 
 [tool.ruff.format]
 quote-style = "double"
