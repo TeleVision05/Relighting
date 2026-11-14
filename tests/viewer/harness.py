@@ -28,6 +28,11 @@ if str(ROOT) not in sys.path:  # the timing probe runs as a script, outside pyte
 from static_server import SafeStaticHandler, ViewerHTTPServer  # noqa: E402
 
 FIXTURE_PREFIX = "/__fixtures__/"
+# RELIGHTING_SUBPATH=/Relighting runs the whole suite against the assembled Pages site served
+# under that sub-path (nothing is served outside it), the way GitHub Pages hosts a project site.
+SUBPATH = os.environ.get("RELIGHTING_SUBPATH", "").rstrip("/")
+if SUBPATH and not SUBPATH.startswith("/"):
+    SUBPATH = "/" + SUBPATH
 # Two panes of about 498 x 720 beside the 300 px sidebar. The page's flex layout always
 # makes the left pane 1 px wider than the right, so compare across panes with crop_common().
 VIEWPORT = {"width": 1300, "height": 720}
@@ -59,8 +64,19 @@ def launch_browser(playwright, mode: str):
 class _FixtureHandler(SafeStaticHandler):
     fixtures: dict[str, Path] = {}
     requests: list[str] = []  # every fixture request line, query string included
+    _inside = True
+
+    def do_GET(self):
+        # Strip the sub-path first so the base class sees /models, which a local page asks for.
+        self._inside = not SUBPATH or self.path.startswith(SUBPATH + "/")
+        if SUBPATH and self._inside:
+            self.path = self.path[len(SUBPATH) :]
+        super().do_GET()
 
     def send_head(self):
+        if not self._inside:
+            self.send_message(404, "Outside the sub-path the site is hosted under.")
+            return None
         path = urlsplit(self.path).path
         if path.startswith(FIXTURE_PREFIX):
             self.requests.append(self.path)
@@ -80,22 +96,40 @@ class ViewerServer:
         self.requests: list[str] = []
         handler = type("Handler", (_FixtureHandler,), {"fixtures": dict(fixtures), "requests": self.requests})
 
+        site_root = ROOT
+        if SUBPATH:  # serve exactly what the Pages workflow publishes
+            import tempfile
+
+            sys.path.insert(0, str(ROOT / "demo"))
+            from assemble_site import assemble
+
+            self._site_dir = tempfile.TemporaryDirectory()
+            site_root = Path(self._site_dir.name)
+            assemble(site_root)
+
         def make(*args, **kwargs):
-            return handler(*args, directory=str(ROOT), **kwargs)
+            return handler(*args, directory=str(site_root), **kwargs)
 
         self.httpd = ViewerHTTPServer(("127.0.0.1", 0), make)
         threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         host, port = self.httpd.server_address[:2]
-        self.base_url = f"http://{host}:{port}"
+        self.base_url = f"http://{host}:{port}{SUBPATH}"
 
     def scene_url(self, name: str, cam: Camera, hosted: bool = False) -> str:
         """The viewer on one fixture scene. ``hosted`` opens it under HOSTED_NAME instead of 127.0.0.1."""
         base = self.base_url.replace("127.0.0.1", HOSTED_NAME) if hosted else self.base_url
-        return f"{base}/index.html?test=1&cam={cam.param}&ply={FIXTURE_PREFIX}{name}"
+        return f"{base}/index.html?test=1&cam={cam.param}&ply={self.fixture_path(name)}"
+
+    @staticmethod
+    def fixture_path(name: str) -> str:
+        """Where a page, served from this server, finds a fixture: an absolute path."""
+        return f"{SUBPATH}{FIXTURE_PREFIX}{name}"
 
     def close(self) -> None:
         self.httpd.shutdown()
         self.httpd.server_close()
+        if getattr(self, "_site_dir", None):
+            self._site_dir.cleanup()
 
 
 _SETTLED_OR_FAILED_JS = """() => {

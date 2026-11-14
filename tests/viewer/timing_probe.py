@@ -100,7 +100,7 @@ def run_mode(playwright, mode: str, server: ViewerServer, scenes: dict[str, Path
             viewer = Viewer(browser)
             try:
                 cam = VIEWS.get(Path(name).stem)
-                url = f"{server.base_url}/index.html?test=1&ply=/__fixtures__/{name}"
+                url = f"{server.base_url}/index.html?test=1&ply={server.fixture_path(name)}"
                 url += f"&cam={cam.param}" if cam else ""
                 row = measure(viewer, url)
                 row.update(scene=name, mb=path.stat().st_size / 1e6, renderer=viewer.renderer())

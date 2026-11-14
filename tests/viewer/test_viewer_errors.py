@@ -8,9 +8,11 @@ that failure in src/errors.js, and must not carry the raw error.
 
 import pytest
 from camera import VIEWS
-from harness import ViewerServer
+from harness import FIXTURE_PREFIX, ViewerServer
 
 pytestmark = pytest.mark.browser
+
+LOAD_WAIT_MS = 180_000
 
 # Words that only ever come from raw errors, never from the plain-language messages.
 RAW = ("HTTP", "404", "Error", "end_header", "Shader compile", "RangeError", "undefined", "0x")
@@ -72,7 +74,7 @@ def bad_server(tmp_path_factory, scene_files):
 
 
 def messages(viewer) -> dict:
-    return viewer.page.evaluate("async () => (await import('/src/errors.js')).MESSAGES")
+    return viewer.page.evaluate("async () => (await import('./src/errors.js')).MESSAGES")
 
 
 def notice(viewer) -> str | None:
@@ -133,16 +135,25 @@ def test_modules_that_cannot_load_get_a_plain_message(viewer, bad_server):
 
 def test_a_failed_load_keeps_the_scene_on_screen_and_reload_recovers(viewer, bad_server):
     viewer.open(bad_server.scene_url("plane.ply", VIEWS["plane"]))
-    viewer.page.fill("#plyPath", "/__fixtures__/missing.ply")
+    # Under software GL on a busy machine every drawn frame can starve the page, and the waits
+    # below poll on animation frames; stop the render loop (loads and the status line still run)
+    # and poll on a timer, with generous timeouts. What is asserted afterwards is unchanged.
+    viewer.pause()
+    viewer.page.fill("#plyPath", bad_server.fixture_path("missing.ply"))
     viewer.page.click("#reloadBtn")
-    viewer.page.wait_for_function("() => document.querySelector('#status').dataset.state === 'error'")
+    viewer.page.wait_for_function(
+        "() => document.querySelector('#status').dataset.state === 'error'", timeout=LOAD_WAIT_MS, polling=200
+    )
     # The plane is still loaded, so the message stays in the status line, off the panes.
     assert_shows(viewer, "not-found", "404", over_panes=False)
     assert viewer.state()["n"] == 3136
 
-    viewer.page.fill("#plyPath", "/__fixtures__/sphere.ply")
+    viewer.page.fill("#plyPath", bad_server.fixture_path("sphere.ply"))
     viewer.page.click("#reloadBtn")
-    viewer.page.wait_for_function("() => window.__relightTest.state().n === 4000")
+    viewer.page.wait_for_function("() => window.__relightTest.state().n === 4000", timeout=LOAD_WAIT_MS, polling=200)
+    viewer.page.wait_for_function(
+        "() => document.querySelector('#status').dataset.state === 'ok'", timeout=LOAD_WAIT_MS, polling=200
+    )
     assert viewer.page.get_attribute("#status", "data-state") == "ok"
     assert notice(viewer) is None
 
@@ -151,13 +162,13 @@ def test_cache_busting_query_strings_only_on_localhost(viewer, viewer_server, br
     viewer.open(viewer_server.scene_url("plane.ply", VIEWS["plane"]))
     assert viewer.errors == [], viewer.errors
     local = viewer_server.requests[-1]
-    assert local.startswith("/__fixtures__/plane.ply?_="), local
+    assert local.startswith(FIXTURE_PREFIX + "plane.ply?_="), local
 
     hosted = type(viewer)(browser)
     try:
         hosted.open(viewer_server.scene_url("plane.ply", VIEWS["plane"], hosted=True))
         assert hosted.state()["n"] == 3136, hosted.status()
         assert hosted.errors == [], hosted.errors
-        assert viewer_server.requests[-1] == "/__fixtures__/plane.ply"
+        assert viewer_server.requests[-1] == FIXTURE_PREFIX + "plane.ply"
     finally:
         hosted.close()
