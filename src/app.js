@@ -24,15 +24,15 @@ const URL_PARAMS = new URLSearchParams(location.search);
 const TEST_MODE = URL_PARAMS.get('test') === '1';
 // Cache-busting query strings only on a local dev server (see isLocalHost).
 const LOCAL_DEV = isLocalHost(location.hostname);
-// Default model: ?ply=… query param wins. Otherwise a local copy opens its own sample scene,
-// and a hosted copy (GitHub Pages) the small demo scene published with it. Both are relative
-// to the page, so the viewer works from any sub-path such as /Relighting/.
-const DEFAULT_PLY = LOCAL_DEV ? './father-day.ply' : './demo/demo-scene.ply';
+// Default model: ?ply=… query param wins. Otherwise the demo scene that is committed as a plain
+// file (so a fresh clone and the hosted copy on GitHub Pages both have it, with no Git LFS).
+// The path is relative to the page, so the viewer works from any sub-path such as /Relighting/.
+const DEFAULT_PLY = './demo/buttons-demo.ply';
 const INITIAL_PLY = URL_PARAMS.get('ply') || DEFAULT_PLY;
-// The demo scene is small (about 3 units across), so it opens closer than the sample scenes.
-const DEMO_CAM = '0.5,0.35,5.5';
-const INITIAL_CAM =
-  URL_PARAMS.get('cam') || (INITIAL_PLY === DEFAULT_PLY && !LOCAL_DEV ? DEMO_CAM : null);
+// yaw,pitch,zoom for the demo scene: the scene is a room that the orbit centre sits inside, so
+// the default looks from 3 units away at the equipment cart in the middle of it.
+const DEMO_CAM = '3.14,0.1,3';
+const INITIAL_CAM = URL_PARAMS.get('cam') || (INITIAL_PLY === DEFAULT_PLY ? DEMO_CAM : null);
 const nextTask = () => new Promise((r) => setTimeout(r, 0));
 
 function createPanes() {

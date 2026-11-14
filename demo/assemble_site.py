@@ -27,7 +27,7 @@ def assemble(out: Path) -> list[Path]:
     for src in sorted((ROOT / "src").rglob("*")):
         if src.is_file() and src.suffix in WEB_SUFFIXES:
             copies.append((src, out / src.relative_to(ROOT)))
-    copies += [(ROOT / "demo" / name, out / "demo" / name) for name in ("demo-scene.ply", "NOTICE")]
+    copies += [(ROOT / "demo" / name, out / "demo" / name) for name in ("buttons-demo.ply", "NOTICE")]
     for source, target in copies:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)

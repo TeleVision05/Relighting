@@ -72,9 +72,9 @@ def site(tmp_path):
 
 def test_the_site_holds_the_viewer_and_the_demo_scene_only(site):
     names = {p.relative_to(site.dir).as_posix() for p in site.dir.rglob("*") if p.is_file()}
-    assert {"index.html", "src/app.js", "src/load-worker.js", "demo/demo-scene.ply", "demo/NOTICE"} <= names
-    assert not [n for n in names if n.endswith(".ply") and n != "demo/demo-scene.ply"], names
-    assert (site.dir / "demo" / "demo-scene.ply").stat().st_size < 15_000_000
+    assert {"index.html", "src/app.js", "src/load-worker.js", "demo/buttons-demo.ply", "demo/NOTICE"} <= names
+    assert not [n for n in names if n.endswith(".ply") and n != "demo/buttons-demo.ply"], names
+    assert 8_000_000 <= (site.dir / "demo" / "buttons-demo.ply").stat().st_size <= 15_000_000
 
 
 def test_the_demo_scene_loads_by_default_from_a_sub_path_and_renders(browser, site):
@@ -82,11 +82,12 @@ def test_the_demo_scene_loads_by_default_from_a_sub_path_and_renders(browser, si
     try:
         viewer.open(site.url + "?test=1")
         state = viewer.state()
-        assert state["loaded"] and state["n"] > 30_000, viewer.status()
-        # The only miss is the model picker asking for the optional /models list, which a
-        # static host does not have; the browser logs that 404 as a console error.
-        assert [r for r in site.log if r[1] >= 400] == [(PREFIX + "models", 404)], site.log
-        assert len(viewer.errors) == 1 and "404" in viewer.errors[0], viewer.errors
+        assert state["loaded"] and state["n"] > 150_000, viewer.status()
+        # A visitor's console must be clean: no failed request, no logged error.
+        assert [r for r in site.log if r[1] >= 400] == [], site.log
+        assert viewer.errors == [], viewer.errors
+        options = viewer.page.eval_on_selector_all("#plyPick option", "els => els.map(e => e.value)")
+        assert options == ["./demo/buttons-demo.ply"], options
         viewer.set_checked("showGizmos", False)
         viewer.pause()
         baked, relit = viewer.capture("hosted-demo")
@@ -97,14 +98,30 @@ def test_the_demo_scene_loads_by_default_from_a_sub_path_and_renders(browser, si
         # Every file came from under the prefix.
         assert site.log, "the server saw no requests"
         assert all(path.startswith(PREFIX) for path, _ in site.log), site.log
-        assert any(path.startswith(PREFIX + "demo/demo-scene.ply") for path, _ in site.log)
+        assert any(path.startswith(PREFIX + "demo/buttons-demo.ply") for path, _ in site.log)
         assert any("load-worker.js" in path for path, _ in site.log), "the load worker did not run"
     finally:
         viewer.close()
 
 
+def test_a_visitor_can_still_open_their_own_file(browser, site, tmp_path):
+    from splat_scenes import write_all
+
+    own = write_all(tmp_path)["sphere"]
+    viewer = Viewer(browser)
+    try:
+        viewer.open(site.url + "?test=1")
+        viewer.pause()  # software GL would spend the wait redrawing the 196,000-splat demo scene
+        viewer.page.set_input_files("#plyFile", str(own))
+        viewer.page.wait_for_function("() => window.__relightTest.state().n === 4000", timeout=180_000)
+        assert "(local)" in viewer.page.input_value("#plyPath")
+        assert viewer.errors == [], viewer.errors
+    finally:
+        viewer.close()
+
+
 def test_a_missing_demo_scene_gives_a_plain_message(browser, site):
-    (site.dir / "demo" / "demo-scene.ply").unlink()
+    (site.dir / "demo" / "buttons-demo.ply").unlink()
     viewer = Viewer(browser)
     try:
         viewer.open(site.url + "?test=1")

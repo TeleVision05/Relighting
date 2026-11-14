@@ -29,7 +29,7 @@ DEFAULT_HOST = "127.0.0.1"
 
 PUBLIC_ROOT_FILES = frozenset({"index.html"})
 PUBLIC_ROOT_SUFFIXES = frozenset({".ply"})
-PUBLIC_DIRS = frozenset({"src", "assets"})
+PUBLIC_DIRS = frozenset({"src", "assets", "demo"})
 PUBLIC_DIR_SUFFIXES = frozenset(
     {".js", ".mjs", ".css", ".json", ".ply", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2"}
 )

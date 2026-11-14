@@ -4,27 +4,29 @@ import { isLocalHost } from './fetch-scene.js';
 
 // Always offered in the dropdown, even without the /models endpoint. A hosted copy ships only
 // the demo scene, so it must not offer files that are not there.
-export const KNOWN_PLYS = ['father-day.ply', 'Buttons.ply'];
-export const HOSTED_PLYS = ['demo/demo-scene.ply'];
+export const KNOWN_PLYS = ['demo/buttons-demo.ply', 'father-day.ply', 'Buttons.ply'];
+export const HOSTED_PLYS = ['demo/buttons-demo.ply'];
 
 const $ = (id) => document.getElementById(id);
 
-// Populate the dropdown: known models always listed, plus whatever the server's /models
-// endpoint reports (serve.py and render_server.py provide it), so the list stays useful
-// under a plain static file server too.
+// Populate the dropdown: known models always listed, plus whatever the local server's /models
+// endpoint reports (serve.py and render_server.py provide it).
 export async function refreshModelList(selected) {
   const pathEl = $('plyPath'),
     pickEl = $('plyPick');
   let files = (isLocalHost(location.hostname) ? KNOWN_PLYS : HOSTED_PLYS).slice();
-  try {
-    const bust = isLocalHost(location.hostname) ? '?_=' + Date.now() : '';
-    const r = await fetch('./models' + bust, { cache: 'no-store' });
-    if (r.ok) {
-      const served = await r.json();
-      for (const f of served) if (!files.includes(f)) files.push(f);
+  // Only a local server has a /models endpoint; a static host would answer 404 (a console
+  // error on every visit), so the hosted page does not ask.
+  if (isLocalHost(location.hostname)) {
+    try {
+      const r = await fetch('./models?_=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) {
+        const served = await r.json();
+        for (const f of served) if (!files.includes(f)) files.push(f);
+      }
+    } catch (e) {
+      /* no /models endpoint — keep the known list */
     }
-  } catch (e) {
-    /* no /models endpoint — keep the known list */
   }
 
   const want = (selected || pathEl.value || '').replace(/^\.\//, '');

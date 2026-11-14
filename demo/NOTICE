@@ -1,14 +1,12 @@
-Relighting demo scene (demo-scene.ply)
+Relighting demo scene (buttons-demo.ply)
 
-What it is: a small 3D Gaussian Splatting scene (a chequered floor, two spheres and a
-column; about 34,000 splats, 5.5 MB) that is computed by demo/make_demo_scene.py. It is
-not a photograph or a capture and contains no third-party data. The baked lighting in it
-is a simple "light from above" shading, written by the script.
+What it is: a slimmed copy of Buttons.ply (a 3D Gaussian Splatting capture of a lab room with a
+mobile equipment cart), made by tools/slim_ply.py: 196,410 of the original 249,973 splats, with
+the stored normals and the higher-order spherical-harmonic terms removed, 11.0 MB.
 
-Licence: MIT, the same as the rest of this repository (see LICENSE), copyright 2026 Tarun
-Vadapalli. You may reuse and redistribute it under those terms.
+Licence: the code of this repository is MIT (see LICENSE). This scene is derived from the
+sample scene Buttons.ply, which is NOT covered by that licence. It is published so the live demo
+has something to show; view it, do not reuse or redistribute it without checking with the owner.
 
-Not covered: the sample scenes Buttons.ply and father-day.ply in the repository root are
-not part of this demo and are not published with it.
-
-Regenerate: python demo/make_demo_scene.py (the output is deterministic).
+Regenerate: git lfs pull && python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply --target-mb 11
+(the output is deterministic).
