@@ -41,13 +41,20 @@ intrinsic albedo, baked irradiance and surface normals.*
 The demo opens `demo/buttons-demo.ply`: a lab scene (a mobile equipment cart in a room), 196,410
 splats, 11.0 MB, made by [`tools/slim_ply.py`](tools/slim_ply.py) from the 249,973-splat, 41 MB
 `Buttons.ply`. The tool drops the stored normals and the higher-order spherical-harmonic terms
-(the viewer shades from the DC term, so nothing visible changes), ranks splats by
-`opacity x (two largest scales)` and keeps the best that fit an 11 MB budget (the faintest, smallest
-21% are removed). Against the full scene, rendered headless on the GPU from the default view, the mean absolute
-pixel difference is 0.0006 (baked pane) and 0.007 (relit pane) on a 0 to 1 scale, and the two are
+(the viewer shades from the DC term, so nothing visible changes), removes a box
+around a person who walked into the capture (6,522 splats, `--crop`, below), ranks the rest by
+`opacity x (two largest scales)` and keeps the best that fit an 11 MB budget (21% of the splats are
+removed in all, the faintest and smallest first). Against the full scene, rendered headless on the GPU from the default view, the mean absolute
+pixel difference is 0.0005 (baked pane) and 0.009 (relit pane) on a 0 to 1 scale, and the two are
 indistinguishable by eye: [`docs/media/demo-vs-full.jpg`](docs/media/demo-vs-full.jpg) (left full
 scene, right demo scene; top baked, bottom relit). The relit pane differs a little more because
-the lighting split and the shadow volume are computed from whichever splats are present.
+the lighting split and the shadow volume are computed from whichever splats are present. The
+only places that differ visibly are where the removed person stood.
+
+Regenerate it with `git lfs pull`, then
+`python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply --target-mb 11 --crop=-5.8,-3.0,-1.5,1.5,-2.8,1.0`.
+The box is in the scene file's own coordinates (`xmin,xmax,ymin,ymax,zmin,zmax`, the export frame
+before the viewer's Y/Z flip); splats whose centre is inside are dropped before the ranking.
 
 Limits: it needs a browser with WebGL2 (a recent Chrome, Edge, Firefox or Safari) and runs entirely
 on your device. A 3DGS capture of a room has floaters and blurry background splats; the relit
@@ -159,9 +166,10 @@ CPU reference renderer:
 The camera is the viewer's orbit camera: `--yaw`, `--pitch` and `--zoom` (and
 `yaw`, `pitch`, `zoom` on `/render`) mean the same as the viewer's
 `?cam=yaw,pitch,zoom`, and default to the view the viewer opens with.
-`Buttons.ply` at 800x600 takes about 4 to 7 s per image and 1600x1600 about 10 to
-13 s (measured 2026-11-13 on an Apple M2 Max; the higher figures at a load
-average near 200). The old per-pixel renderer took 25 to 110 s at 800x600. `/render` always renders `father-day.ply` (`PLY_PATH`).
+`Buttons.ply` at 800x600 takes about 1.7 s per image (measured 2026-11-13 on an
+Apple M2 Max at a load average of about 7: 1.7 s and 1.6 s on two runs; earlier runs
+at a load average of 18 to 200 took 1.8 s up to about 7 s). 1600x1600 took about 10 to
+13 s on the loaded machine and was not re-measured. The old per-pixel renderer took 25 to 110 s at 800x600. `/render` always renders `father-day.ply` (`PLY_PATH`).
 
 ### Servers: what they expose
 
@@ -256,8 +264,8 @@ the size limits on `src/`: no file over 500 lines, no function over 75.
 The code is released under the [MIT licence](LICENSE), copyright 2026 Tarun
 Vadapalli. **The sample scenes (`Buttons.ply`, `father-day.ply` and anything
 derived from them, including `demo/buttons-demo.ply`) are not covered by that licence.** They are
-included only so the viewer has something to show (the derived demo scene is also published on the
-live demo, for viewing); do not reuse or redistribute them without checking with the owner.
+included only so the viewer has something to show (the owner has confirmed the derived demo scene may be published, for viewing, in the live
+demo); do not reuse or redistribute them without checking with the owner.
 
 ## Roadmap
 

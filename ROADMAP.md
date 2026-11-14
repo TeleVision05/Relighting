@@ -122,8 +122,10 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
       `zoom` on `render_png`, `/render` and the command line.
 - Done when: ~~a CPU render and a viewer screenshot of `Buttons.ply` are committed
   side by side under `docs/`~~ replaced by `tests/viewer/test_cpu_parity.py`,
-  which compares the two pixel by pixel on every browser-test run (the sample
-  scenes are not under the code licence, so renders of them are not committed).
+  which compares the two on every browser-test run, within a stated tolerance (mean
+  difference under 1 and 99th percentile under 4, of 255). Renders of the demo scene
+  (a slimmed `Buttons.ply`, published with the owner's permission, not MIT) are committed
+  under `docs/media/`; renders of the other sample scene are not.
   The elongated-splat orientation test is
   `tests/test_cpu_render.py::test_elongated_splat_lands_with_the_projected_orientation`.
 
@@ -206,8 +208,9 @@ pre-push / post-commit / post-checkout / post-merge), no `.github/`, no CI.
 3. The two LFS scenes total about 158 MB. Is GitHub LFS bandwidth acceptable
    for this, or should the scenes move to a release asset or external bucket
    with a download script?
-4. Should the viewer be published (GitHub Pages)? That decides whether M4 needs
-   a real CI browser or a local-only test.
+4. ~~Should the viewer be published (GitHub Pages)?~~ Decided 2026-11-13: yes. The `Pages`
+   workflow publishes the viewer and `demo/buttons-demo.ply` on every push to `main`;
+   CI runs the browser tests in headless Chromium.
 5. `Relighting 3D Gaussian Splatting.md` is 130 KB, mostly inline base64
    images. Keep it as is, or move it to `docs/` with the images extracted to
    files?

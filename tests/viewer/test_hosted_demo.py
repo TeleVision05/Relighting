@@ -81,6 +81,9 @@ def test_the_demo_scene_loads_by_default_from_a_sub_path_and_renders(browser, si
     viewer = Viewer(browser)
     try:
         viewer.open(site.url + "?test=1")
+        # Stop the render loop first: under software GL each frame of the 196,000-splat scene
+        # can starve the page while Playwright waits for the checkbox to settle.
+        viewer.pause()
         state = viewer.state()
         assert state["loaded"] and state["n"] > 150_000, viewer.status()
         # A visitor's console must be clean: no failed request, no logged error.
@@ -89,7 +92,6 @@ def test_the_demo_scene_loads_by_default_from_a_sub_path_and_renders(browser, si
         options = viewer.page.eval_on_selector_all("#plyPick option", "els => els.map(e => e.value)")
         assert options == ["./demo/buttons-demo.ply"], options
         viewer.set_checked("showGizmos", False)
-        viewer.pause()
         baked, relit = viewer.capture("hosted-demo")
         for name, pane in (("baked", baked), ("relit", relit)):
             assert covered(pane).mean() > 0.25, f"{name} pane is mostly empty"
