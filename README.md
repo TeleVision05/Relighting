@@ -9,8 +9,9 @@ Cook-Torrance/GGX BRDF.
 
 **Status: experimental.** The WebGL viewer works and is used by hand. The CPU
 reference renderer draws the same geometry from the same camera: a browser
-test checks that the two agree pixel for pixel on the baked and normals views
-(see [ROADMAP.md](ROADMAP.md) for what is still missing).
+test checks that the two agree within a stated tolerance on the baked and normals
+views (mean difference under 1 and 99th percentile under 4, out of 255, on the
+test scenes; see [ROADMAP.md](ROADMAP.md) for what is still missing).
 
 ## Live demo
 
@@ -18,16 +19,49 @@ test checks that the two agree pixel for pixel on the baked and normals views
 browser, with nothing to install. (It goes live once this branch is merged to `main`: the
 `Pages` workflow publishes the site on every push to `main`.)
 
-The demo opens a small synthetic scene (a chequered floor, two spheres and a column, about
-34,000 splats, 5.5 MB) with the baked appearance on the left and the relit result on the right.
-Drag to orbit, scroll to zoom, then move the lights, try the presets and the G-buffer views. Its
-limits: the scene is computed by [`demo/make_demo_scene.py`](demo/make_demo_scene.py), not captured
-from a real place, so it shows the lighting model rather than a photographic result; it needs a
-browser with WebGL2 (a recent Chrome, Edge, Firefox or Safari) and runs entirely on your device;
-and the sample scenes `Buttons.ply` and `father-day.ply` are not published (see Licence), though
-"Open file..." still lets you view a 3DGS `.ply` of your own, which never leaves your computer.
-The scene is under the MIT licence; see [`demo/NOTICE`](demo/NOTICE). To build the same site
-locally: `python demo/assemble_site.py _site`, then serve `_site` with any static file server.
+[![Relighting: orbit, move a light, then albedo, irradiance and normals](docs/media/hero-poster.jpg)](docs/media/hero.mp4)
+
+*The 12 second clip (click the picture): baked appearance on the left, the relit result on the
+right. The camera orbits, a warm sun is swept across the scene, then the view switches to
+intrinsic albedo, baked irradiance and surface normals.*
+
+### How it works
+
+- A standard 3DGS `.ply` stores baked radiance (albedo x lighting) in its SH DC terms. The viewer
+  reads it in a worker and shows it unchanged in the left pane.
+- A Retinex-style split separates a smooth irradiance field from an intrinsic albedo, so the
+  old lighting can be removed.
+- Each Gaussian's shortest axis gives its surface normal; the normals are smoothed over neighbours.
+- A coarse density volume built from the splats is ray-marched for shadows.
+- The right pane re-shades the albedo with up to 8 lights (Cook-Torrance/GGX), drawn as depth-sorted
+  alpha-blended splats in WebGL2.
+
+### The demo scene and its limits
+
+The demo opens `demo/buttons-demo.ply`: a lab scene (a mobile equipment cart in a room), 196,410
+splats, 11.0 MB, made by [`tools/slim_ply.py`](tools/slim_ply.py) from the 249,973-splat, 41 MB
+`Buttons.ply`. The tool drops the stored normals and the higher-order spherical-harmonic terms
+(the viewer shades from the DC term, so nothing visible changes), ranks splats by
+`opacity x (two largest scales)` and keeps the best that fit an 11 MB budget (the faintest, smallest
+21% are removed). Against the full scene, rendered headless on the GPU from the default view, the mean absolute
+pixel difference is 0.0006 (baked pane) and 0.007 (relit pane) on a 0 to 1 scale, and the two are
+indistinguishable by eye: [`docs/media/demo-vs-full.jpg`](docs/media/demo-vs-full.jpg) (left full
+scene, right demo scene; top baked, bottom relit). The relit pane differs a little more because
+the lighting split and the shadow volume are computed from whichever splats are present.
+
+Limits: it needs a browser with WebGL2 (a recent Chrome, Edge, Firefox or Safari) and runs entirely
+on your device. A 3DGS capture of a room has floaters and blurry background splats; the relit
+result is a plausible re-shading, not a physically exact one, and the lights cast shadows only
+through a coarse volume. "Open file..." lets you view a 3DGS `.ply` of your own, which never leaves your
+computer; the file picker, not the hosted copy, is the way to try your own scenes. The other sample
+scene, `father-day.ply`, is not published (see Licence). To build the same site locally:
+`python demo/assemble_site.py _site`, then serve `_site` with any static file server.
+
+Performance (measured 2026-11-13 with `tests/viewer/timing_probe.py`, headless Chromium on Metal,
+Apple M2 Max, window 1300x720 so each pane is about 500x720, machine busy with other jobs): the demo scene
+loads in about 0.5 s and draws both panes in about 20 ms (the viewer's own frame interval was
+19 ms), about 50 frames a second, so no quality setting was needed. On software GL
+(SwiftShader), which has no GPU, it is far slower; that is what the CI browser tests use.
 
 ## Layout
 
@@ -38,7 +72,7 @@ locally: `python demo/assemble_site.py _site`, then serve `_site` with any stati
   cyber, day), material sliders, `Separate` / `Keep AO` / `N Smooth`, six
   G-buffer modes (relit, intrinsic albedo, baked SH DC, baked irradiance/AO,
   surface normals, specular only) and a model picker. Loads
-  `father-day.ply` by default (the hosted copy: `demo/demo-scene.ply`); `?ply=Buttons.ply` picks another.
+  `demo/buttons-demo.ply` by default; `?ply=father-day.ply` or `?ply=Buttons.ply` picks another.
   `index.html` is only the page; the code is native ES modules in `src/`
   with no build step, so the folder can be hosted as static files:
 
@@ -75,7 +109,8 @@ locally: `python demo/assemble_site.py _site`, then serve `_site` with any stati
 - `Relighting 3D Gaussian Splatting.md`: design notes and implementation
   status.
 - `Buttons.ply`, `father-day.ply`: sample scenes, stored in Git LFS.
-- `demo/`: the demo scene for the hosted copy (`demo-scene.ply`, generated, plain Git), its generator, its `NOTICE`, and `assemble_site.py`, which builds the folder that the `Pages` workflow publishes.
+- `demo/`: the demo scene (`buttons-demo.ply`, a slimmed derivative of `Buttons.ply`, plain Git not LFS), its `NOTICE`, and `assemble_site.py`, which builds the folder that the `Pages` workflow publishes.
+- `tools/`: `slim_ply.py` (makes the demo scene) and `record_hero.py` (records the clip in `docs/media/`).
 - `tests/`: Python tests (`tests/*.py`), browser tests of the viewer
   (`tests/viewer/`) and Node unit tests of the viewer's pure modules
   (`tests/js/`).
@@ -136,7 +171,7 @@ anyone who can reach your machine can open the viewer and download the scenes.
 
 They serve an explicit allow-list, nothing else: `index.html`, the `*.ply`
 files in the repo root, and files with web suffixes (`.js`, `.css`, images,
-...) inside the `src/` and `assets/` folders. Dotfiles, `.git`, source and
+...) inside the `src/`, `assets/` and `demo/` folders. Dotfiles, `.git`, source and
 notes, `..` paths, symlinks that leave the repo and directory listings all
 answer "not found". If you add a new folder of viewer files, add its name to
 `PUBLIC_DIRS` in `static_server.py`.
@@ -178,6 +213,7 @@ behind an occluder.
 .venv/bin/python -m playwright install chromium     # once
 .venv/bin/python -m pytest -q -m browser            # software GL (SwiftShader)
 RELIGHTING_GL=gpu .venv/bin/python -m pytest -q -m browser   # on the GPU, much faster
+RELIGHTING_SUBPATH=/Relighting .venv/bin/python -m pytest -q -m browser   # against the Pages site, served under /Relighting/
 .venv/bin/python -m pytest -q -m "not browser"      # everything except the browser tests
 ```
 
@@ -219,9 +255,9 @@ the size limits on `src/`: no file over 500 lines, no function over 75.
 
 The code is released under the [MIT licence](LICENSE), copyright 2026 Tarun
 Vadapalli. **The sample scenes (`Buttons.ply`, `father-day.ply` and anything
-derived from them) are not covered by that licence.** They are included only
-so the viewer has something to show; do not reuse or redistribute them without
-checking with the owner.
+derived from them, including `demo/buttons-demo.ply`) are not covered by that licence.** They are
+included only so the viewer has something to show (the derived demo scene is also published on the
+live demo, for viewing); do not reuse or redistribute them without checking with the owner.
 
 ## Roadmap
 
