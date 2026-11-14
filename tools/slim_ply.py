@@ -1,6 +1,7 @@
 """Slim a 3D Gaussian Splatting ``.ply`` so it is small enough to host as a plain Git file.
 
-    python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply --target-mb 11
+    python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply --target-mb 11 \\
+        --crop=-5.0,-3.8,-0.9,1.2,-1.3,-0.1
 
 Method (each step is reported with its splat count and size):
 
@@ -10,7 +11,13 @@ Method (each step is reported with its splat count and size):
 2. Rank the splats by contribution, ``opacity * (largest scale * second largest scale)``: how
    much screen area a splat covers times how opaque it is, with the scales taken out of log
    space. A splat that is both small and faint adds almost nothing to any view.
-3. Keep the highest-ranked splats that fit ``--target-mb`` (the 8 to 15 MB budget for a hosted
+3. Optionally remove everything inside one or more axis-aligned boxes (``--crop``). Boxes are
+   in the scene file's own coordinates (the 3DGS export frame, Y down, before the viewer's
+   flip), written ``xmin,xmax,ymin,ymax,zmin,zmax``; a splat is removed when its centre lies
+   inside a box, bounds included. Cropping happens before the ranking, so the size budget is
+   then filled with the next-best splats. The demo uses it to remove a person who walked into
+   the capture.
+4. Keep the highest-ranked splats that fit ``--target-mb`` (the 8 to 15 MB budget for a hosted
    demo), in their original order so the file stays reproducible and spatially coherent.
 
 Output properties: x y z f_dc_0..2 opacity scale_0..2 rot_0..3, all float32 (56 bytes a splat).
@@ -80,6 +87,32 @@ def contribution(data: np.ndarray) -> np.ndarray:
     return opacity * np.exp(scales[2] + scales[1])
 
 
+def parse_box(text: str) -> tuple[float, ...]:
+    try:
+        box = tuple(float(v) for v in text.split(","))
+    except ValueError:
+        box = ()
+    if len(box) != 6 or any(box[i] > box[i + 1] for i in (0, 2, 4)):
+        raise SlimError(f"--crop {text!r} must be xmin,xmax,ymin,ymax,zmin,zmax with each min below its max.")
+    return box
+
+
+def inside(data: np.ndarray, box: tuple[float, ...]) -> np.ndarray:
+    """Boolean mask of the splats whose centre is inside ``box``."""
+    mask = np.ones(len(data), dtype=bool)
+    for axis, lo, hi in zip("xyz", box[0::2], box[1::2], strict=True):
+        mask &= (data[axis] >= lo) & (data[axis] <= hi)
+    return mask
+
+
+def crop(data: np.ndarray, boxes: list[tuple[float, ...]]) -> np.ndarray:
+    """``data`` without the splats inside any of ``boxes``, in their original order."""
+    drop = np.zeros(len(data), dtype=bool)
+    for box in boxes:
+        drop |= inside(data, box)
+    return data[~drop]
+
+
 def slim(data: np.ndarray, target_bytes: int) -> np.ndarray:
     """The most significant splats that fit ``target_bytes``, in their original order."""
     record = 4 * len(KEEP)
@@ -108,6 +141,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("source", type=Path)
     ap.add_argument("dest", type=Path)
     ap.add_argument("--target-mb", type=float, default=11.0, help="size budget, 8 to 15 for a hosted demo")
+    ap.add_argument(
+        "--crop",
+        action="append",
+        default=[],
+        metavar="XMIN,XMAX,YMIN,YMAX,ZMIN,ZMAX",
+        help="remove the splats inside this box, in the file's coordinates (repeatable)",
+    )
     args = ap.parse_args(argv)
     try:
         data, names = read_ply(args.source)
@@ -120,7 +160,11 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"step 1: {len(data):>8,} splats, {len(KEEP)} properties, about {no_sh / 1e6:6.1f} MB (SH and normals dropped)"
         )
-        kept = slim(data, int(args.target_mb * 1e6))
+        boxes = [parse_box(c) for c in args.crop]
+        cropped = crop(data, boxes)
+        if boxes:
+            print(f"crop  : {len(data) - len(cropped):>8,} splats removed by {len(boxes)} box(es)")
+        kept = slim(cropped, int(args.target_mb * 1e6))
         size = write_ply(args.dest, kept)
         pct = 100 * len(kept) / len(data)
         print(

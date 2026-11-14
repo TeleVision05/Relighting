@@ -2,11 +2,15 @@ Relighting demo scene (buttons-demo.ply)
 
 What it is: a slimmed copy of Buttons.ply (a 3D Gaussian Splatting capture of a lab room with a
 mobile equipment cart), made by tools/slim_ply.py: 196,410 of the original 249,973 splats, with
-the stored normals and the higher-order spherical-harmonic terms removed, 11.0 MB.
+the stored normals and the higher-order spherical-harmonic terms removed, and with a person who
+walked into the capture cropped out (a box of 6,522 splats), 11.0 MB.
 
 Licence: the code of this repository is MIT (see LICENSE). This scene is derived from the
-sample scene Buttons.ply, which is NOT covered by that licence. It is published so the live demo
-has something to show; view it, do not reuse or redistribute it without checking with the owner.
+sample scene Buttons.ply, which is NOT covered by that licence. The owner has confirmed that it
+may be published, for viewing, in the live demo. Do not reuse or redistribute it without checking
+with the owner.
 
-Regenerate: git lfs pull && python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply --target-mb 11
-(the output is deterministic).
+Regenerate: git lfs pull && python tools/slim_ply.py Buttons.ply demo/buttons-demo.ply \
+  --target-mb 11 --crop=-5.8,-3.0,-1.5,1.5,-2.8,1.0
+(the box is in the file's own coordinates, xmin,xmax,ymin,ymax,zmin,zmax; the output is
+deterministic).

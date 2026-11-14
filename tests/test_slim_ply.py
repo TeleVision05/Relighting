@@ -55,3 +55,33 @@ def test_a_file_without_splat_properties_is_refused(tmp_path, capsys):
     src.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nend_header\n\0\0\0\0")
     assert slim_ply.main([str(src), str(tmp_path / "out.ply")]) == 1
     assert "3DGS" in capsys.readouterr().err
+
+
+def test_crop_removes_exactly_the_splats_inside_the_box_and_refills_the_budget(tmp_path):
+    src, dst = tmp_path / "in.ply", tmp_path / "out.ply"
+    full = write_full(src)
+    box = "10,29,-100,100,-100,100"  # splats with x = 10..29 (bounds included)
+    assert slim_ply.main([str(src), str(dst), "--target-mb", "15", "--crop", box]) == 0
+    out = slim_ply.read_ply(dst)[0]
+    assert len(out) == len(full) - 20
+    assert not np.any((out["x"] >= 10) & (out["x"] <= 29))
+
+
+def test_crop_with_a_budget_keeps_the_best_of_what_is_left(tmp_path):
+    src, dst = tmp_path / "in.ply", tmp_path / "out.ply"
+    full = write_full(src)
+    target_mb = (1024 + 40 * 56) / 1e6
+    args = [str(src), str(dst), "--target-mb", str(target_mb), "--crop", "0,49,-100,100,-100,100"]
+    assert slim_ply.main(args) == 0
+    out = slim_ply.read_ply(dst)[0]
+    rest = full[50:]
+    expected = set(rest["x"][np.argsort(slim_ply.contribution(rest))[::-1][:40]].astype(int))
+    assert set(out["x"].astype(int)) == expected
+
+
+def test_a_malformed_crop_box_gets_a_plain_message(tmp_path, capsys):
+    src = tmp_path / "in.ply"
+    write_full(src)
+    for bad in ("1,2,3", "5,1,0,1,0,1", "a,b,c,d,e,f"):
+        assert slim_ply.main([str(src), str(tmp_path / "out.ply"), "--crop", bad]) == 1
+        assert "xmin,xmax" in capsys.readouterr().err
