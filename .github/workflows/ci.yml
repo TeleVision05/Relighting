@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      # The sample scenes are Git LFS objects; no check needs them, so do not download them.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: pip install -r requirements-dev.txt
+      - run: npm ci
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+      - name: eslint
+        run: npx eslint . --max-warnings=0
+      - name: prettier
+        run: npx prettier --check .
+      - name: viewer unit tests (Node, no browser or GPU)
+        run: npm test
+
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: pytest
+        # The viewer's browser tests need Chromium; the `browser` job runs them.
+        run: python -m pytest -q -m "not browser"
+
+  browser:
+    name: Viewer tests (headless Chromium, software GL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The tests write their own synthetic scenes; the LFS sample scenes are not needed.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: Viewer tests
+        env:
+          RELIGHTING_GL: software # SwiftShader: same pixels on every runner, no GPU needed
+        run: python -m pytest -q -m browser --durations=5
+      - name: Timing probe (informational, never fails the build)
+        continue-on-error: true
+        run: python tests/viewer/timing_probe.py --gl software
+      - name: Upload captured images of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewer-test-images
+          path: test-results/viewer/
+          if-no-files-found: ignore

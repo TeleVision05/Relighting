@@ -1,70 +1,80 @@
 """Static server for the relighting viewer — stdlib only, no numpy needed.
 
-    python serve.py            # http://127.0.0.1:8000, opens a browser
-    python serve.py 8080       # pick a port
+    python serve.py              # http://127.0.0.1:8000, opens a browser
+    python serve.py 8080         # pick a port
+    python serve.py --no-browser # do not open a browser (scripts, CI)
+    python serve.py --host 0.0.0.0   # let other devices on your network connect (see below)
 
 Why not `python -m http.server`:
   * it serves the directory you happen to be standing in, not this one;
   * it has no /models endpoint, so the model dropdown 404s;
-  * it lets the browser cache index.html, so edits appear not to take effect.
+  * it lets the browser cache index.html, so edits appear not to take effect;
+  * it serves every file, including .git, and lists directories.
 
-This fixes all three. render_splats.py --serve does the same and adds the
+This serves only an allow-list (index.html, the *.ply scenes, and the src/ and assets/
+folders; see static_server.py), listens on 127.0.0.1 only unless --host says otherwise,
+and sends no-cache headers. render_splats.py --serve does the same and adds the
 server-side /render endpoint, but that one needs numpy.
 """
-import json
+
+import argparse
+import logging
 import sys
 import threading
 import webbrowser
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+
+from static_server import (
+    SafeStaticHandler,
+    ServerStartError,
+    add_host_argument,
+    bind_server,
+    exposure_warning,
+    list_models,
+    port_arg,
+)
 
 ROOT = Path(__file__).resolve().parent
 
 
-class ViewerHandler(SimpleHTTPRequestHandler):
+class ViewerHandler(SafeStaticHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
-    def end_headers(self) -> None:
-        # A cached index.html is indistinguishable from "my changes did nothing".
-        if not any(h.lower().startswith(b"cache-control")
-                   for h in (self._headers_buffer or [])):
-            self.send_header("Cache-Control", "no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
-        super().end_headers()
 
-    def do_GET(self) -> None:
-        if urlparse(self.path).path == "/models":
-            body = json.dumps(sorted(p.name for p in ROOT.glob("*.ply"))).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        super().do_GET()
-
-    def log_message(self, fmt: str, *args) -> None:
-        return
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Serve the relighting viewer.")
+    parser.add_argument("port", nargs="?", type=port_arg, default=8000, help="port to listen on (default 8000)")
+    add_host_argument(parser)
+    parser.add_argument("--no-browser", action="store_true", help="do not open a browser window")
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    plys = sorted(p.name for p in ROOT.glob("*.ply"))
-    url = f"http://127.0.0.1:{port}/index.html"
-    with ThreadingHTTPServer(("127.0.0.1", port), ViewerHandler) as httpd:
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    args = parse_args(argv)
+    try:
+        httpd = bind_server(ViewerHandler, args.host, args.port)
+    except ServerStartError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    plys = list_models(ROOT)
+    url = f"http://{args.host if args.host != '0.0.0.0' else '127.0.0.1'}:{args.port}/index.html"
+    with httpd:
         print(f"Serving {ROOT}")
         print(f"Models: {', '.join(plys) if plys else '(none found)'}")
+        warning = exposure_warning(args.host)
+        if warning:
+            print(f"\nWARNING: {warning}")
         print(f"\n  {url}\n\nCtrl+C to stop.")
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        if not args.no_browser:
+            threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\nStopped.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

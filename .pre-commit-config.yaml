@@ -1,0 +1,35 @@
+# Install once per clone: .venv/bin/pre-commit install
+# Run on everything:      .venv/bin/pre-commit run --all-files
+# The same checks run in CI (.github/workflows/ci.yml); never commit with --no-verify.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        # Sample scenes are Git LFS pointers; this stops a stray real binary
+        # (a raw .ply, a video) from being committed as a normal git file.
+        args: ['--maxkb=20000']
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      - id: ruff-check
+        args: ['--fix']
+      - id: ruff-format
+
+  # eslint and prettier come from package.json (npm ci), so the hook and CI use one version.
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: npx --no-install eslint --max-warnings=0
+        language: system
+        files: \.(js|mjs|html)$
+      - id: prettier
+        name: prettier
+        entry: npx --no-install prettier --write --ignore-unknown
+        language: system
+        files: \.(js|mjs|html|css|json|ya?ml)$

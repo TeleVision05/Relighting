@@ -1,1 +1,5 @@
+-r requirements.txt
 pytest>=8.0
+ruff>=0.8
+playwright>=1.48
+pre-commit>=4.0
